@@ -32,6 +32,10 @@ yarn-error.log*
 
 # env files (can opt-in for committing if needed)
 .env*
+!.env.example
+
+# app: server-side session cookie store (never commit)
+.flipkart-session.json
 
 # vercel
 .vercel
