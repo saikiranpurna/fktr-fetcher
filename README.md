@@ -1,72 +1,186 @@
 # Flipkart Delivery Tracker
 
-Internal tool for a delivery team. Fetches your Flipkart **My Orders** and shows, per order:
-account, order ID, customer, item, **delivery address**, status, and the delivery **OTP** —
-across multiple accounts, with client-side filters (status / date window / search) and one-click
-**CSV** export.
+Internal tool for a delivery team. It logs into your Flipkart **My Orders** with your own
+browser cookie and shows, **one row per shipment**: order ID, shipment/**tracking ID**, item,
+status, delivery **OTP**, customer **mobile**, and delivery address — across one or more Flipkart
+accounts. Filter by status/date/search and export everything to **CSV / Excel**.
 
-## Architecture
+- A single order ID can appear as **several rows** (one per unit/shipment), each with its own
+  tracking ID, item, status, OTP and mobile.
+- If a shipment has an **OTP**, it is treated as **Out for Delivery**.
 
-Two services (see `docker-compose.yml`):
+---
 
-- **`backend/`** — Python (**FastAPI** + **Scrapling**). Calls Flipkart's internal *My Orders*
-  JSON APIs over plain HTTP using each account's cookies plus Flipkart's `x-user-agent` (FKUA)
-  header, with `curl_cffi` TLS impersonation. Paginates every recent order and fetches each
-  order's detail page for the **address + live OTP**. **No headless browser.**
-- **repo root** — **Next.js** frontend (UI only). Every `/api/*` request is proxied to the backend
-  via `next.config.ts` rewrites, so the frontend code is backend-agnostic.
+## 1. Prerequisites
 
-## Run (Docker)
+- **Docker Desktop** installed and **running** (Windows/macOS/Linux). This is the only requirement
+  to run the app. On Windows, Docker Desktop with the WSL2 backend.
+- A **Flipkart account** you're logged into in a normal browser (to export its cookie).
+
+> You do **not** need Node, Python, or Chromium installed — everything runs inside Docker.
+
+---
+
+## 2. Quick start (Docker)
+
+From the project folder (the one containing `docker-compose.yml`):
 
 ```bash
 docker compose up --build -d
 ```
 
-- Frontend: **http://localhost:3100**  ·  Backend API: **http://localhost:8000**
-- In the **Accounts** panel, drop each Flipkart account's cookie **`.json`** (a Cookie-Editor
-  export). One file per account — orders load automatically.
-- Stop: `docker compose down` (add `-v` to also delete stored cookies).
+- First build takes **~2–3 minutes** (downloads dependencies). Later starts are instant.
+- When it's up:
+  - **App (open this):** http://localhost:3100
+  - Backend API (optional/debug): http://localhost:8000
 
-Cookies are persisted in a named Docker volume (`session` → `/data`), so they survive restarts.
+Check both are running:
 
-## Getting your cookie
+```bash
+docker compose ps          # both "backend" and "frontend" should be Up
+```
 
-1. Log in at <https://www.flipkart.com/> in your browser.
-2. Export cookies as JSON (e.g. the **Cookie-Editor** extension → *Export → JSON*).
-3. Drop the file into the app's **Accounts** panel (or click to choose).
+Stop it:
 
-## How it fetches (no browser)
+```bash
+docker compose down        # stop containers (your added cookies are kept)
+docker compose down -v     # also delete stored cookies (start fresh)
+```
 
-- `GET  …/api/5/self-serve/orders` — paginated 7/page via `nextCallParams`, up to `FLIPKART_MAX_PAGES`.
-- `POST …/api/4/page/fetch` — per-order detail (delivery address + the active unit's OTP), for up to
-  `FLIPKART_MAX_DETAILS` most-recent orders.
-- Both require the account cookie + the `x-user-agent` FKUA header. Undeliverable/"retrying" units
-  are treated as out-for-delivery so their OTP surfaces.
+---
 
-## Backend endpoints
+## 3. Add your Flipkart account (one-time, in the app)
+
+The board is empty until you add an account cookie.
+
+1. In a normal browser, **log in** at <https://www.flipkart.com/>.
+2. Install a cookie exporter (e.g. the **Cookie-Editor** browser extension).
+3. On flipkart.com, open Cookie-Editor → **Export → JSON**. Save/copy the `.json`.
+4. Open the app (http://localhost:3100) → **Accounts** panel →
+   **drag the `.json` file onto the drop zone** (or click to choose). One file per account —
+   you can drop several at once.
+
+Orders load automatically. To add more accounts, drop more files; to remove one, click **Remove**.
+
+> Cookies expire (Flipkart sessions are short-lived). When an account chip turns **red**
+> (“session expired”), just re-export the cookie and drop the new file in again.
+
+---
+
+## 4. Using the app
+
+- **Refresh** re-fetches; **Auto-refresh (60s)** keeps it current.
+- **Filters:**
+  - Status pills: **Out for Delivery / Arriving / Delivered / Other** (click to toggle).
+  - **Date:** All / Today / Tomorrow / Next 7 days / Last 7 days.
+  - **Search:** matches order ID, tracking ID (FMPP…), mobile number, item, or customer.
+- **Download CSV** exports exactly what's currently shown (respects your filters). Columns:
+  `Account, Order ID, Tracking ID, Customer Name, Item, Delivery Address, Mobile, OTP, Status,
+  Activity Date`. It opens cleanly in Excel (UTF‑8 BOM).
+
+**Note on speed:** a full refresh takes **~40–70 seconds** because it pulls your entire order
+history plus per-shipment details (address, OTP, mobile) — with no browser, over plain HTTP.
+Larger accounts take longer.
+
+---
+
+## 5. Configuration (optional)
+
+Defaults work out of the box. To tune the backend, copy `.env.example` to **`.env`** in the project
+root (Docker Compose reads it automatically), then edit:
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `APP_TIMEZONE` | `Asia/Kolkata` | Timezone for the Today / Next 7 days filters |
+| `FLIPKART_MAX_PAGES` | `100` | How many order pages to pull (7 orders/page). Stops early when there are no more |
+| `FLIPKART_MAX_DETAILS` | `40` | Extra address lookups for recent delivered orders (active/out-for-delivery orders always get theirs) |
+| `FLIPKART_TIMEOUT_MS` | `20000` | Per-request timeout |
+| `ADMIN_TOKEN` | *(blank)* | If set, adding/removing accounts requires this token (enter it in the Accounts panel). Leave blank for local use |
+
+After changing `.env`: `docker compose up -d` (recreates with the new values).
+
+Your added cookies persist in a Docker volume named `session`, so they survive restarts and code
+updates.
+
+---
+
+## 6. Update the code / rebuild
+
+After pulling new changes:
+
+```bash
+docker compose up -d --build
+```
+
+---
+
+## 7. Troubleshooting
+
+| Symptom | Fix |
+|---|---|
+| `docker compose` errors / "cannot connect" | Start **Docker Desktop** and wait until it's running |
+| App doesn't open on :3100 | Another app may use the port. Edit `docker-compose.yml` → frontend `ports: "3100:3000"` to e.g. `"3200:3000"`, then `docker compose up -d`. (Same for backend `8000` if needed.) |
+| Board is **empty** | Add an account cookie (section 3). If added and still empty, set **Date = All dates** and clear status pills — you may simply have nothing out for delivery today |
+| Account chip is **red** / “session expired” | The cookie expired — re-export from flipkart.com and drop the new `.json` in |
+| “No Flipkart accounts” message | Drop at least one cookie `.json` in the Accounts panel |
+| Refresh seems slow (~1 min) | Normal for large accounts — it fetches all orders + per-shipment details |
+
+View logs if something looks wrong:
+
+```bash
+docker compose logs backend --tail 50
+docker compose logs frontend --tail 50
+```
+
+---
+
+## 8. How it works (for developers)
+
+Two services (see `docker-compose.yml`):
+
+- **`backend/`** — Python (**FastAPI** + **Scrapling**/`curl_cffi`). Calls Flipkart's internal
+  *My Orders* JSON APIs over plain HTTP using the account cookie + Flipkart's `x-user-agent` (FKUA)
+  header. Paginates all orders, then fetches each **active shipment's** detail for its address,
+  mobile, and live OTP. **No headless browser.** One order is exploded into one row per unit.
+- **repo root** — **Next.js** frontend (UI only). In Docker the browser calls the backend directly
+  (`NEXT_PUBLIC_BACKEND_URL`, baked at build) so long refreshes aren't cut off by the dev proxy.
+
+Backend API:
 
 | Method | Path | Notes |
 |---|---|---|
 | GET | `/api/orders` | `{ ok, orders[], accounts[], fetchedAt, timezone }` |
 | GET | `/api/accounts` | `{ accounts[] }` |
-| POST | `/api/accounts` | body `{ label, cookie }`; `x-admin-token` required when `ADMIN_TOKEN` set |
-| DELETE | `/api/accounts?id=…` | omit `id` to clear all; same admin guard |
+| POST | `/api/accounts` | body `{ label, cookie }` (+ `x-admin-token` if `ADMIN_TOKEN` set) |
+| DELETE | `/api/accounts?id=…` | omit `id` to clear all |
 | GET | `/api/health` | liveness + account count |
 
-## Configuration
+### Run without Docker (local dev)
 
-- **Backend** (`backend/.env.example`): `APP_TIMEZONE`, `FLIPKART_MAX_PAGES` (20),
-  `FLIPKART_MAX_DETAILS` (40), `FLIPKART_TIMEOUT_MS`, `ADMIN_TOKEN`, `FLIPKART_IMPERSONATE`.
-- **Frontend**: `BACKEND_URL` — proxy target, resolved at build time; Compose sets it to
-  `http://backend:8000`.
-
-## Develop without Docker
+Docker is strongly recommended (it avoids Python/`curl_cffi`/`playwright` install issues,
+especially on Windows). If you still want a local setup:
 
 ```bash
-# backend
-cd backend && pip install -r requirements.txt && uvicorn app.main:app --reload --port 8000
-# frontend (new shell, repo root)
-npm install && npm run dev      # proxies to http://localhost:8000 (override with BACKEND_URL)
+# 1) Backend  (Python 3.12)
+cd backend
+pip install -r requirements.txt
+uvicorn app.main:app --reload --port 8000
+
+# 2) Frontend (Node 22) — in a second shell, from the repo root
+npm install
+# tell the browser where the backend is (create .env.local):
+#   NEXT_PUBLIC_BACKEND_URL=http://localhost:8000
+npm run dev            # http://localhost:3000
 ```
 
-Frontend unit tests (filters / CSV / rendering): `npm test`.
+Config for local backend runs goes in `backend/.env` (see `backend/.env.example`; it is
+auto-loaded). Frontend unit tests: `npm test`.
+
+---
+
+## Security / privacy
+
+- Your Flipkart cookie is stored **only** in the local Docker volume (`session`) — never committed
+  (`.flipkart-session.json` and `.env` are gitignored).
+- This tool uses **your own** logged-in account cookie to read **your own** orders. Set
+  `ADMIN_TOKEN` if you deploy it somewhere shared.
