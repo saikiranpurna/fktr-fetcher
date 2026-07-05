@@ -12,8 +12,8 @@ export function OrderList({ orders }: { orders: Order[] }) {
 
   return (
     <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
-      {orders.map((order) => (
-        <OrderCard key={`${order.account}:${order.orderId}`} order={order} />
+      {orders.map((order, i) => (
+        <OrderCard key={`${order.account}:${order.orderId}:${order.trackingId}:${i}`} order={order} />
       ))}
     </div>
   );

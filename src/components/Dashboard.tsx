@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { ordersToCsv } from "@/lib/orders/csv";
+import { API_BASE } from "@/lib/api";
 import {
   applyOrderFilters,
   DEFAULT_FILTERS,
@@ -45,7 +46,7 @@ export function Dashboard() {
 
   const loadAccounts = useCallback(async () => {
     try {
-      const res = await fetch("/api/accounts");
+      const res = await fetch(`${API_BASE}/api/accounts`);
       if (res.ok) setAccountMetas(((await res.json()) as AccountsResponse).accounts);
     } catch {
       // account metadata is non-critical; ignore
@@ -55,7 +56,7 @@ export function Dashboard() {
   const fetchOrders = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await fetch("/api/orders", { cache: "no-store" });
+      const res = await fetch(`${API_BASE}/api/orders`, { cache: "no-store" });
       const body = (await res.json()) as OrdersResponse | ErrorResponse;
       if (body.ok) {
         setOrders(body.orders);

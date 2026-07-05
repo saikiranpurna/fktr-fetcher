@@ -7,6 +7,7 @@ export interface Order {
   customerName: string; // "Unknown customer" when source field missing
   itemName: string; // first item title; "<title> (+N more)" for multi-item
   deliveryAddress: string; // non-empty address parts joined by ", "
+  phone: string; // delivery contact mobile (from the detail endpoint); "" when unavailable
   otp: string | null; // null when unavailable
   status: OrderStatus;
   rawStatus: string; // original status text, kept for debugging/logging

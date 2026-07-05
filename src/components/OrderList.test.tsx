@@ -13,6 +13,7 @@ const orders: Order[] = [
     customerName: "Asha Verma",
     itemName: "Boat Airdopes 141",
     deliveryAddress: "12 MG Road, Bengaluru",
+    phone: "9000302101",
     otp: "8842",
     status: "OUT_FOR_DELIVERY",
     rawStatus: "Out for Delivery",
@@ -25,6 +26,7 @@ const orders: Order[] = [
     customerName: "Rohan Iyer",
     itemName: "Samsung 25W Charger",
     deliveryAddress: "45 Anna Salai, Chennai",
+    phone: "",
     otp: null,
     status: "DELIVERED",
     rawStatus: "Delivered",
@@ -45,6 +47,26 @@ describe("OrderList", () => {
     // null OTP renders the dash placeholder.
     expect(screen.getByText("—")).toBeTruthy();
     expect(screen.getByText("FMPP4118839140")).toBeTruthy();
+  });
+
+  it("renders each unit of a multi-unit order as its own card (same orderId, unique keys)", () => {
+    const base = {
+      account: "A",
+      orderId: "ODX",
+      customerName: "C",
+      deliveryAddress: "Addr",
+      phone: "",
+      activityDateIso: "2026-07-03T09:00:00+05:30",
+    };
+    const multi: Order[] = [
+      { ...base, trackingId: "FMPPA", itemName: "Item A", otp: "1111", status: "OUT_FOR_DELIVERY", rawStatus: "x" },
+      { ...base, trackingId: "FMPPB", itemName: "Item B", otp: null, status: "DELIVERED", rawStatus: "y" },
+    ];
+    render(<OrderList orders={multi} />);
+    expect(screen.queryAllByRole("article")).toHaveLength(2);
+    expect(screen.getByText("FMPPA")).toBeTruthy();
+    expect(screen.getByText("FMPPB")).toBeTruthy();
+    expect(screen.getAllByText("ODX")).toHaveLength(2);
   });
 
   it("shows the empty-state copy and no cards when there are no orders", () => {

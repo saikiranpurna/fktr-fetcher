@@ -94,20 +94,20 @@ def _product_title(order: dict, unit: dict) -> str:
 
 # --- detail request (which unit to fetch) -----------------------------------
 
-def detail_request_for(order: dict) -> dict | None:
-    """Fields the detail endpoint needs. Prefer the actively-delivering unit — its OTP only
-    shows when that unit is the request's unit. shareToken is optional (omit when absent)."""
+def detail_targets_for(order: dict) -> list[dict]:
+    """One detail request per real (non-VAS) unit. The detail endpoint returns that unit's OTP
+    plus the order-level address. shareToken is order-level (optional)."""
     order_id = _s(get(order, "orderMetaData.orderId")).strip()
     units = get(order, "units")
-    if not order_id or not isinstance(units, dict) or not units:
-        return None
-    unit_id = next(
-        (uid for uid, u in units.items()
-         if map_status(_s(get(u, "metaData.moRedesignHeading"))) == "OUT_FOR_DELIVERY"),
-        next(iter(units.keys())),
-    )
+    if not order_id or not isinstance(units, dict):
+        return []
     share_token = _s(get(order, "accessToOrderDataBag.endUser.id")).strip()
-    return {"orderId": order_id, "unitId": unit_id, "shareToken": share_token}
+    targets: list[dict] = []
+    for unit_id, u in units.items():
+        if get(u, "vasItemDetails") is not None:
+            continue
+        targets.append({"orderId": order_id, "unitId": unit_id, "shareToken": share_token})
+    return targets
 
 
 # --- detail extraction (address + live OTP) ---------------------------------
@@ -147,21 +147,20 @@ def _format_address(addr: Any) -> str:
     return ", ".join(parts) if parts else "Address unavailable"
 
 
-def _list_otp(units: list) -> str | None:
-    """OTP from a unit's otpCallout in the list response (only present while OFD)."""
-    for u in units:
-        oc = get(u, "deliveryDataBag.otpCallout")
-        if not oc:
-            continue
-        if isinstance(oc, str) and oc.strip():
-            return oc.strip()
-        if isinstance(oc, dict):
-            direct = oc.get("otp") or oc.get("code") or oc.get("value")
-            if isinstance(direct, str) and direct.strip():
-                return direct.strip()
-            m = re.search(r"\b\d{4,8}\b", str(oc))
-            if m:
-                return m.group(0)
+def _unit_otp(unit: dict) -> str | None:
+    """OTP from a single unit's otpCallout in the list response (present only while OFD)."""
+    oc = get(unit, "deliveryDataBag.otpCallout")
+    if not oc:
+        return None
+    if isinstance(oc, str) and oc.strip():
+        return oc.strip()
+    if isinstance(oc, dict):
+        direct = oc.get("otp") or oc.get("code") or oc.get("value")
+        if isinstance(direct, str) and direct.strip():
+            return direct.strip()
+        m = re.search(r"\b\d{4,8}\b", str(oc))
+        if m:
+            return m.group(0)
     return None
 
 
@@ -173,7 +172,9 @@ def orders_array(body: Any) -> list | None:
 
 
 def parse_orders(raw_orders: list, details: dict[str, dict]) -> list[dict]:
-    """raw_orders: the aggregated list orders. details: {orderId: {address, otp}} from the detail endpoint."""
+    """Explode each order into one row PER UNIT (shipment): a single orderId can yield several
+    rows, each with its own item, status, tracking id, and OTP. `details` is keyed
+    {orderId: {unitId: {address, otp}}}; the delivery address is order-level (shared)."""
     out: list[dict] = []
     for order in raw_orders:
         if not isinstance(order, dict):
@@ -181,56 +182,42 @@ def parse_orders(raw_orders: list, details: dict[str, dict]) -> list[dict]:
         order_id = _s(get(order, "orderMetaData.orderId")).strip()
         if not order_id:
             continue
-        units = _unit_values(order)
-        real = [u for u in units if get(u, "vasItemDetails") is None] or units
-        titles: list[str] = []
-        headings: list[str] = []
-        delivered_ms = None
-        promised_ms = None
-        for u in real:
-            title = _product_title(order, u)
-            if title and title not in titles:
-                titles.append(title)
+        units = get(order, "units")
+        items = list(units.items()) if isinstance(units, dict) else []
+        # Skip free add-ons (membership, trust shield); fall back to all units if that leaves nothing.
+        real = [(uid, u) for uid, u in items if get(u, "vasItemDetails") is None] or items
+        if not real:
+            continue
+
+        unit_details = details.get(order_id, {})
+        order_address = next((d["address"] for d in unit_details.values() if d.get("address")), None)
+        address = _format_address(order_address)
+        phone = _s(order_address.get("phoneNumber")).strip() if isinstance(order_address, dict) else ""
+        customer = _s(get(order, "accessToOrderDataBag.buyer.name")).strip() or "Unknown customer"
+        order_date = get(order, "orderMetaData.orderDate")
+
+        for unit_id, u in real:
             heading = _s(get(u, "metaData.moRedesignHeading")).strip()
-            if heading:
-                headings.append(heading)
-            dv = _num(get(u, "deliveryDataBag.promiseDataBag.actualDeliveredDate"))
-            if dv:
-                delivered_ms = max(delivered_ms or 0, dv)
-            pv = _num(get(u, "deliveryDataBag.promiseDataBag.promisedDate"))
-            if pv:
-                promised_ms = pv if promised_ms is None else min(promised_ms, pv)
-
-        status, raw_status = _derive_status(headings)
-        first = titles[0] if titles else "Unknown item"
-        item_name = f"{first} (+{len(titles) - 1} more)" if len(titles) > 1 else first
-        chosen_ms = (delivered_ms or promised_ms) if status == "DELIVERED" else (promised_ms or delivered_ms)
-        activity_iso = _to_iso(chosen_ms) or _to_iso(get(order, "orderMetaData.orderDate")) or ""
-
-        tracking_id = ""
-        for u in units:
-            tid = _s(get(u, "metaData.trackingId")).strip()
-            if tid:
-                tracking_id = tid
-                break
-
-        detail = details.get(order_id, {})
-        otp = _list_otp(units) or detail.get("otp") or None
-        if otp:
-            # An OTP is only issued for an active delivery -> the order is out for delivery.
-            status = "OUT_FOR_DELIVERY"
-
-        out.append({
-            "orderId": order_id,
-            "trackingId": tracking_id,
-            "customerName": _s(get(order, "accessToOrderDataBag.buyer.name")).strip() or "Unknown customer",
-            "itemName": item_name,
-            "deliveryAddress": _format_address(detail.get("address")),
-            "otp": otp,
-            "status": status,
-            "rawStatus": raw_status,
-            "activityDateIso": activity_iso,
-        })
+            status = map_status(heading)
+            delivered = _num(get(u, "deliveryDataBag.promiseDataBag.actualDeliveredDate"))
+            promised = _num(get(u, "deliveryDataBag.promiseDataBag.promisedDate"))
+            chosen_ms = (delivered or promised) if status == "DELIVERED" else (promised or delivered)
+            otp = _unit_otp(u) or unit_details.get(unit_id, {}).get("otp") or None
+            if otp:
+                # An OTP is only issued for an active delivery -> out for delivery.
+                status = "OUT_FOR_DELIVERY"
+            out.append({
+                "orderId": order_id,
+                "trackingId": _s(get(u, "metaData.trackingId")).strip(),
+                "customerName": customer,
+                "itemName": _product_title(order, u) or "Unknown item",
+                "deliveryAddress": address,
+                "phone": phone,
+                "otp": otp,
+                "status": status,
+                "rawStatus": heading,
+                "activityDateIso": _to_iso(chosen_ms) or _to_iso(order_date) or "",
+            })
     return out
 
 

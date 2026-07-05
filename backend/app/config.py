@@ -4,6 +4,14 @@ from __future__ import annotations
 
 import os
 
+try:
+    # Load backend/.env on local runs; a no-op in Docker (env comes from docker-compose).
+    from dotenv import load_dotenv
+
+    load_dotenv()
+except ImportError:
+    pass
+
 _DEFAULT_FKUA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36 FKUA/website/42/website/Desktop"
@@ -27,8 +35,9 @@ class Config:
     session_store_path: str = os.environ.get("SESSION_STORE_PATH", ".flipkart-session.json")
     # When set, /api/accounts mutations require the header x-admin-token.
     admin_token: str = os.environ.get("ADMIN_TOKEN", "")
-    # Paginate My Orders (7/page, most recent first) up to this many pages.
-    max_pages: int = max(1, _int("FLIPKART_MAX_PAGES", 20))
+    # Paginate My Orders (7/page, most recent first). Stops early when Flipkart reports no more
+    # orders; this is a safety cap (100 pages ~= 700 orders). Raise it if you have more history.
+    max_pages: int = max(1, _int("FLIPKART_MAX_PAGES", 100))
     # Fetch each order's detail page (address + live OTP) for at most this many recent orders.
     max_details: int = max(0, _int("FLIPKART_MAX_DETAILS", 40))
     # Per-request timeout, seconds (env is milliseconds to match the frontend convention).

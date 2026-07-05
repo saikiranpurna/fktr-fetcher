@@ -10,6 +10,7 @@ function order(overrides: Partial<Order>): Order {
     customerName: "Asha Verma",
     itemName: "Boat Airdopes 141",
     deliveryAddress: "12 MG Road, Bengaluru",
+    phone: "9000302101",
     otp: "8842",
     status: "OUT_FOR_DELIVERY",
     rawStatus: "Out for Delivery",
@@ -24,13 +25,14 @@ describe("ordersToCsv", () => {
     expect(csv.startsWith("\uFEFF")).toBe(true);
     const lines = csv.slice(1).split("\r\n");
     expect(lines[0]).toBe(
-      "Account,Order ID,Tracking ID,Customer Name,Item,Delivery Address,OTP,Status,Activity Date",
+      "Account,Order ID,Tracking ID,Customer Name,Item,Delivery Address,Mobile,OTP,Status,Activity Date",
     );
     // Address has a comma -> must be quoted.
     expect(lines[1]).toContain('"12 MG Road, Bengaluru"');
     expect(lines[1]).toContain("Out for Delivery");
     expect(lines[1]).toContain("8842");
     expect(lines[1]).toContain("FMPP4118839140");
+    expect(lines[1]).toContain("9000302101");
   });
 
   it("renders a null OTP as an empty field and escapes embedded quotes", () => {

@@ -4,9 +4,11 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci
 COPY . .
-# Rewrite destinations are resolved at build time, so bake the backend URL here.
+# BACKEND_URL: server-side rewrite target (build-time). NEXT_PUBLIC_BACKEND_URL: the URL the
+# browser calls directly (bypasses the proxy's 30s timeout for the full orders fetch).
 ARG BACKEND_URL=http://localhost:8000
-ENV BACKEND_URL=$BACKEND_URL NEXT_TELEMETRY_DISABLED=1
+ARG NEXT_PUBLIC_BACKEND_URL=
+ENV BACKEND_URL=$BACKEND_URL NEXT_PUBLIC_BACKEND_URL=$NEXT_PUBLIC_BACKEND_URL NEXT_TELEMETRY_DISABLED=1
 RUN npm run build
 
 FROM node:22-slim AS run

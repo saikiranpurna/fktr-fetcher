@@ -13,6 +13,7 @@ function order(overrides: Partial<Order>): Order {
     customerName: "Cust",
     itemName: "Thing",
     deliveryAddress: "Addr",
+    phone: "",
     otp: null,
     status: "ARRIVING",
     rawStatus: "Arriving",

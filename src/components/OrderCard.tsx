@@ -30,6 +30,9 @@ export function OrderCard({ order }: { order: Order }) {
         <p className="break-words text-sm text-neutral-500 dark:text-neutral-400">
           {order.deliveryAddress}
         </p>
+        {order.phone && (
+          <p className="text-sm text-neutral-600 dark:text-neutral-300">Mobile: {order.phone}</p>
+        )}
       </div>
 
       <div className="mt-auto rounded-lg bg-neutral-100 px-3 py-2 dark:bg-neutral-800">

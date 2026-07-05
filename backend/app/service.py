@@ -10,25 +10,46 @@ from .errors import AppError, config_error
 
 
 def _enrich_details(cookies: dict, raw_orders: list[dict]) -> dict[str, dict]:
-    """Fetch per-order detail (address + live OTP) for the most-recent orders, concurrently."""
+    """Fetch per-unit detail (address + live OTP). EVERY active unit (out-for-delivery / arriving)
+    gets a call so no live OTP is missed no matter how deep it sits; delivered orders get one call
+    each (for the address) up to config.max_details. Returns {orderId: {unitId: {address, otp}}}."""
     if config.max_details <= 0:
         return {}
-    targets = []
-    for o in raw_orders[: config.max_details]:
-        req = parser.detail_request_for(o)
-        if req:
-            targets.append(req)
+    active: list[tuple[str, str, str]] = []       # OTP-bearing candidates, any position
+    address_only: list[tuple[str, str, str]] = []  # first unit of orders with no active unit
+    for order in raw_orders:
+        order_id = str(parser.get(order, "orderMetaData.orderId") or "").strip()
+        units = parser.get(order, "units")
+        if not order_id or not isinstance(units, dict):
+            continue
+        share = str(parser.get(order, "accessToOrderDataBag.endUser.id") or "").strip()
+        first_uid = None
+        has_active = False
+        for unit_id, u in units.items():
+            if parser.get(u, "vasItemDetails") is not None:
+                continue
+            if first_uid is None:
+                first_uid = unit_id
+            status = parser.map_status(str(parser.get(u, "metaData.moRedesignHeading") or ""))
+            if status in ("OUT_FOR_DELIVERY", "ARRIVING"):
+                active.append((order_id, unit_id, share))
+                has_active = True
+        if first_uid and not has_active:
+            address_only.append((order_id, first_uid, share))
+
+    # Active units first (OTP priority, safety-capped), then addresses for recent delivered orders.
+    targets = active[:300] + address_only[: config.max_details]
     if not targets:
         return {}
     details: dict[str, dict] = {}
-    with ThreadPoolExecutor(max_workers=6) as pool:
+    with ThreadPoolExecutor(max_workers=8) as pool:
         results = pool.map(
-            lambda t: (t["orderId"], flipkart.fetch_detail(cookies, t["orderId"], t["unitId"], t["shareToken"])),
+            lambda t: (t[0], t[1], flipkart.fetch_detail(cookies, t[0], t[1], t[2])),
             targets,
         )
-        for order_id, detail in results:
+        for order_id, unit_id, detail in results:
             if detail:
-                details[order_id] = detail
+                details.setdefault(order_id, {})[unit_id] = detail
     return details
 
 

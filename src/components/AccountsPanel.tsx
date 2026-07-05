@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { API_BASE } from "@/lib/api";
 import type { AccountMeta, AccountResult } from "@/lib/types";
 
 const ADMIN_TOKEN_KEY = "fkrt.adminToken";
@@ -53,7 +54,7 @@ export function AccountsPanel({
   }
 
   async function postAccount(accountLabel: string, cookie: string): Promise<string | null> {
-    const res = await fetch("/api/accounts", {
+    const res = await fetch(`${API_BASE}/api/accounts`, {
       method: "POST",
       headers: headers(),
       body: JSON.stringify({ label: accountLabel, cookie }),
@@ -127,7 +128,7 @@ export function AccountsPanel({
     setBusy(true);
     setInlineError(null);
     try {
-      const res = await fetch(`/api/accounts?id=${encodeURIComponent(id)}`, {
+      const res = await fetch(`${API_BASE}/api/accounts?id=${encodeURIComponent(id)}`, {
         method: "DELETE",
         headers: headers(),
       });
