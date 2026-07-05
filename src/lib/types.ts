@@ -3,6 +3,7 @@ export type OrderStatus = "OUT_FOR_DELIVERY" | "DELIVERED" | "ARRIVING" | "OTHER
 export interface Order {
   account: string; // label of the Flipkart account this order came from
   orderId: string;
+  trackingId: string; // shipment/tracking id (e.g. FMPP4118839140); "" when not yet shipped
   customerName: string; // "Unknown customer" when source field missing
   itemName: string; // first item title; "<title> (+N more)" for multi-item
   deliveryAddress: string; // non-empty address parts joined by ", "

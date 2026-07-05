@@ -9,6 +9,7 @@ const orders: Order[] = [
   {
     account: "Seller North",
     orderId: "OD001",
+    trackingId: "FMPP4118839140",
     customerName: "Asha Verma",
     itemName: "Boat Airdopes 141",
     deliveryAddress: "12 MG Road, Bengaluru",
@@ -20,6 +21,7 @@ const orders: Order[] = [
   {
     account: "Seller South",
     orderId: "OD002",
+    trackingId: "",
     customerName: "Rohan Iyer",
     itemName: "Samsung 25W Charger",
     deliveryAddress: "45 Anna Salai, Chennai",
@@ -42,6 +44,7 @@ describe("OrderList", () => {
     expect(screen.getByText("Delivered")).toBeTruthy();
     // null OTP renders the dash placeholder.
     expect(screen.getByText("—")).toBeTruthy();
+    expect(screen.getByText("FMPP4118839140")).toBeTruthy();
   });
 
   it("shows the empty-state copy and no cards when there are no orders", () => {

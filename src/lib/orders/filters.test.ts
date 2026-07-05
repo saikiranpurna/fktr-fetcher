@@ -9,6 +9,7 @@ function order(overrides: Partial<Order>): Order {
   return {
     account: "North",
     orderId: "OD1",
+    trackingId: "",
     customerName: "Cust",
     itemName: "Thing",
     deliveryAddress: "Addr",

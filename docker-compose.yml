@@ -1,0 +1,35 @@
+# Full stack: Python (Scrapling) backend + Next.js frontend.
+# Build/run:  docker compose up --build
+# Then open   http://localhost:3000   and drop each account's cookie .json in the Accounts panel.
+
+services:
+  backend:
+    build: ./backend
+    environment:
+      SESSION_STORE_PATH: /data/flipkart-session.json
+      APP_TIMEZONE: ${APP_TIMEZONE:-Asia/Kolkata}
+      FLIPKART_MAX_PAGES: ${FLIPKART_MAX_PAGES:-20}
+      FLIPKART_MAX_DETAILS: ${FLIPKART_MAX_DETAILS:-40}
+      FLIPKART_TIMEOUT_MS: ${FLIPKART_TIMEOUT_MS:-20000}
+      ADMIN_TOKEN: ${ADMIN_TOKEN:-}
+    volumes:
+      - session:/data
+    ports:
+      - "8000:8000"   # exposed for debugging / direct API access
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: .
+      args:
+        BACKEND_URL: http://backend:8000
+    environment:
+      BACKEND_URL: http://backend:8000
+    ports:
+      - "3100:3000"
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+volumes:
+  session:

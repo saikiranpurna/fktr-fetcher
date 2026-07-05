@@ -5,9 +5,16 @@ export function OrderCard({ order }: { order: Order }) {
   return (
     <article className="flex flex-col gap-3 rounded-xl border border-black/10 bg-white p-4 shadow-sm dark:border-white/15 dark:bg-neutral-900">
       <div className="flex items-start justify-between gap-2">
-        <span className="font-mono text-sm text-neutral-500 dark:text-neutral-400">
-          {order.orderId}
-        </span>
+        <div className="flex min-w-0 flex-col">
+          <span className="font-mono text-sm text-neutral-500 dark:text-neutral-400">
+            {order.orderId}
+          </span>
+          {order.trackingId && (
+            <span className="font-mono text-[11px] text-neutral-400 dark:text-neutral-500">
+              {order.trackingId}
+            </span>
+          )}
+        </div>
         <StatusBadge status={order.status} />
       </div>
 

@@ -51,7 +51,7 @@ export function applyOrderFilters(
     }
 
     if (search) {
-      const hay = `${o.orderId} ${o.itemName} ${o.customerName} ${o.account}`.toLowerCase();
+      const hay = `${o.orderId} ${o.trackingId} ${o.itemName} ${o.customerName} ${o.account}`.toLowerCase();
       if (!hay.includes(search)) return false;
     }
     return true;

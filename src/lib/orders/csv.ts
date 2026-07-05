@@ -3,6 +3,7 @@ import { STATUS_LABELS, type Order } from "../types";
 const HEADERS = [
   "Account",
   "Order ID",
+  "Tracking ID",
   "Customer Name",
   "Item",
   "Delivery Address",
@@ -24,6 +25,7 @@ export function ordersToCsv(orders: Order[]): string {
       [
         o.account,
         o.orderId,
+        o.trackingId,
         o.customerName,
         o.itemName,
         o.deliveryAddress,

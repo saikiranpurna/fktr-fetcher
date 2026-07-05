@@ -1,0 +1,13 @@
+node_modules
+.next
+.git
+.gitignore
+backend
+data
+.env
+.env.*
+.flipkart-session.json
+*.log
+npm-debug.log*
+Dockerfile
+.dockerignore
