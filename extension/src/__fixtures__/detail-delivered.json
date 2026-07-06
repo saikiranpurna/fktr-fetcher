@@ -1,0 +1,27 @@
+{
+  "__NOTE__": "Synthetic, PII-free. Delivered order: address present, no otpValue (OTP is issued only while out for delivery). Shape verified live 2026-07-06.",
+  "RESPONSE": {
+    "slots": [
+      {
+        "widget": {
+          "data": {
+            "shipmentDetails": {
+              "address": {
+                "addressId": "ADDR0002",
+                "name": "Test Recipient Two",
+                "addressLine1": "7 Second Street",
+                "addressLine2": "",
+                "city": "Sampletown",
+                "state": "Demo State",
+                "pinCode": "110011",
+                "phoneNumber": "9111111111",
+                "altPhoneNumber": "",
+                "masked": false
+              }
+            }
+          }
+        }
+      }
+    ]
+  }
+}

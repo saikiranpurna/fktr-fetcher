@@ -1,0 +1,100 @@
+{
+  "__NOTE__": "Synthetic, PII-free fixture. Shape verified live against Flipkart's /api/5/self-serve/orders response (2026-07-06); all values fabricated.",
+  "RESPONSE": {
+    "multipleOrderDetailsView": {
+      "moreOrder": false,
+      "nextCallParams": [],
+      "orders": [
+        {
+          "orderMetaData": { "orderId": "OD100000000000000001", "orderDate": 1783106018677 },
+          "accessToOrderDataBag": {
+            "buyer": { "name": "Test Buyer One" },
+            "endUser": { "id": "SHARETOKEN0000000000000000000000000001" }
+          },
+          "productDataBag": {
+            "LST0000000000000001": { "productBasicData": { "title": "Wireless Mouse" } },
+            "LST0000000000000002": { "productBasicData": { "title": "Free Membership Pass" } }
+          },
+          "units": {
+            "100000000000000001001": {
+              "vasItemDetails": null,
+              "metaData": {
+                "moRedesignHeading": "Out for delivery",
+                "trackingId": "FMPP1000000001",
+                "listingId": "LST0000000000000001",
+                "fsn": "FSN0000000000001"
+              },
+              "deliveryDataBag": {
+                "otpCallout": { "otp": "4321" },
+                "promiseDataBag": { "promisedDate": 1783272600000, "actualDeliveredDate": 0 }
+              }
+            },
+            "100000000000000001002": {
+              "vasItemDetails": { "type": "MEMBERSHIP" },
+              "metaData": {
+                "moRedesignHeading": "Delivered on Sun Jul 05",
+                "trackingId": "",
+                "listingId": "LST0000000000000002",
+                "fsn": "FSN0000000000002"
+              },
+              "deliveryDataBag": {
+                "otpCallout": null,
+                "promiseDataBag": { "promisedDate": 1783621799000, "actualDeliveredDate": 1783270608077 }
+              }
+            }
+          }
+        },
+        {
+          "orderMetaData": { "orderId": "OD100000000000000002", "orderDate": 1783020018677 },
+          "accessToOrderDataBag": {
+            "buyer": { "name": "Test Buyer Two" },
+            "endUser": { "id": "SHARETOKEN0000000000000000000000000002" }
+          },
+          "productDataBag": {
+            "LST0000000000000003": { "productBasicData": { "title": "USB-C Cable" } }
+          },
+          "units": {
+            "100000000000000002001": {
+              "vasItemDetails": null,
+              "metaData": {
+                "moRedesignHeading": "Arriving today by 11 pm",
+                "trackingId": "FMPP1000000002",
+                "listingId": "LST0000000000000003",
+                "fsn": "FSN0000000000003"
+              },
+              "deliveryDataBag": {
+                "otpCallout": null,
+                "promiseDataBag": { "promisedDate": 1783300000000, "actualDeliveredDate": 0 }
+              }
+            }
+          }
+        },
+        {
+          "orderMetaData": { "orderId": "OD100000000000000003", "orderDate": 1782900018677 },
+          "accessToOrderDataBag": {
+            "buyer": { "name": "" },
+            "endUser": { "id": "" }
+          },
+          "productDataBag": {
+            "LST0000000000000004": { "productBasicData": { "title": "Ceramic Coffee Mug" } }
+          },
+          "units": {
+            "100000000000000003001": {
+              "vasItemDetails": null,
+              "metaData": {
+                "moRedesignHeading": "Delivered on Fri Jul 03",
+                "trackingId": "FMPP1000000003",
+                "listingId": "LST0000000000000004",
+                "fsn": "FSN0000000000004"
+              },
+              "deliveryDataBag": {
+                "otpCallout": null,
+                "promiseDataBag": { "promisedDate": 1782950000000, "actualDeliveredDate": 1782960000000 }
+              }
+            }
+          }
+        }
+      ]
+    }
+  }
+}

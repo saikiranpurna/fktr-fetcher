@@ -1,0 +1,36 @@
+{
+  "__NOTE__": "Synthetic, PII-free. Shape verified live against /api/4/page/fetch (2026-07-06): a nested `address` object plus an `otpValue` string appear somewhere in the page model. Values fabricated.",
+  "RESPONSE": {
+    "slots": [
+      {
+        "widget": {
+          "data": {
+            "shipmentDetails": {
+              "address": {
+                "addressId": "ADDR0001",
+                "name": "Test Recipient",
+                "addressLine1": "42 Example Road",
+                "addressLine2": "Near Sample Park",
+                "city": "Testville",
+                "state": "Test State",
+                "pinCode": "560001",
+                "phoneNumber": "9000000000",
+                "altPhoneNumber": "",
+                "masked": false
+              }
+            }
+          }
+        }
+      },
+      {
+        "widget": {
+          "data": {
+            "otpWidget": {
+              "otpValue": "4321"
+            }
+          }
+        }
+      }
+    ]
+  }
+}
