@@ -6,7 +6,7 @@ import { parseError } from "./errors";
 type Dict = Record<string, unknown>;
 
 // Type guard (preserves narrowing); mirrors Python's `isinstance(x, dict)` — arrays excluded.
-function isObj(v: unknown): v is Dict {
+export function isObj(v: unknown): v is Dict {
   return typeof v === "object" && v !== null && !Array.isArray(v);
 }
 
@@ -36,7 +36,7 @@ function toIso(ms: unknown): string | null {
 }
 
 // "" for null/undefined, else the value stringified (mirrors _s).
-function str(v: unknown): string {
+export function str(v: unknown): string {
   return v == null ? "" : typeof v === "string" ? v : String(v);
 }
 
