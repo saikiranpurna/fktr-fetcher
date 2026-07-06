@@ -161,13 +161,35 @@ export function Dashboard() {
         busy={loading}
       />
 
-      {error && <ErrorNotice code={error.code} message={error.message} />}
+      {error && (
+        <div className="flex flex-col gap-2">
+          <ErrorNotice code={error.code} message={error.message} />
+          {error.code === "AUTH_EXPIRED" && (
+            <button
+              type="button"
+              onClick={() =>
+                void chrome.tabs.create({ url: "https://www.flipkart.com/account/orders" })
+              }
+              className="w-fit rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700"
+            >
+              Open Flipkart login
+            </button>
+          )}
+        </div>
+      )}
 
       {orders.length > 0 && (
         <OrderFilters filters={filters} onChange={setFilters} accounts={accountLabels} />
       )}
 
-      <OrderList orders={visible} />
+      {snapshots.length === 0 && !loading ? (
+        <div className="rounded-xl border border-dashed border-black/15 p-10 text-center text-sm text-neutral-500 dark:border-white/15 dark:text-neutral-400">
+          No accounts yet. Make sure you&apos;re logged into Flipkart in this browser, then use{" "}
+          <span className="font-medium">Fetch this account</span> above.
+        </div>
+      ) : (
+        <OrderList orders={visible} />
+      )}
     </div>
   );
 }

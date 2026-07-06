@@ -14,13 +14,26 @@ export interface FlkResponse {
 }
 export type FetchLike = (input: string, init?: RequestInit) => Promise<FlkResponse>;
 
-const BASE_HEADERS: Record<string, string> = {
-  "x-user-agent": CONFIG.fkua,
-  accept: "application/json",
-};
+const FKUA_OVERRIDE_KEY = "fkrt.fkua";
+
+// Staleness guard: Flipkart occasionally bumps the FKUA version. An operator can set
+// chrome.storage.local["fkrt.fkua"] to a fresh value without republishing; otherwise
+// the built-in default (verified working) is used. Storage-less contexts (tests) fall
+// straight through to the default.
+async function resolveFkua(): Promise<string> {
+  try {
+    const got = await chrome.storage.local.get(FKUA_OVERRIDE_KEY);
+    const override: unknown = got[FKUA_OVERRIDE_KEY];
+    return typeof override === "string" && override.trim() ? override : CONFIG.fkua;
+  } catch {
+    return CONFIG.fkua;
+  }
+}
 
 // Paginate My Orders (7/page) following `nextCallParams`, up to CONFIG.maxPages.
 export async function fetchOrders(fetchFn: FetchLike = fetch): Promise<unknown[]> {
+  const fkua = await resolveFkua();
+  const headers: Record<string, string> = { "x-user-agent": fkua, accept: "application/json" };
   const base = CONFIG.ordersBase;
   const seen = new Set<string>();
   const all: unknown[] = [];
@@ -31,7 +44,7 @@ export async function fetchOrders(fetchFn: FetchLike = fetch): Promise<unknown[]
     const res = await fetchFn(url, {
       method: "GET",
       credentials: "include",
-      headers: BASE_HEADERS,
+      headers,
       signal: AbortSignal.timeout(CONFIG.timeoutMs),
     });
     if (res.status === 401 || res.status === 403) throw authExpired();
@@ -89,6 +102,7 @@ export async function fetchDetail(
   shareToken = "",
   fetchFn: FetchLike = fetch,
 ): Promise<{ address?: unknown; otp?: string | null }> {
+  const fkua = await resolveFkua();
   const requestContext: Record<string, unknown> = {
     type: "CX_ORDER_DETAIL_PAGE",
     orderId,
@@ -118,7 +132,7 @@ export async function fetchDetail(
     const res = await fetchFn(CONFIG.detailUrl, {
       method: "POST",
       credentials: "include",
-      headers: { ...BASE_HEADERS, "content-type": "application/json" },
+      headers: { "x-user-agent": fkua, accept: "application/json", "content-type": "application/json" },
       body: JSON.stringify(body),
       signal: AbortSignal.timeout(CONFIG.timeoutMs),
     });
