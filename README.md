@@ -5,6 +5,12 @@ browser cookie and shows, **one row per shipment**: order ID, shipment/**trackin
 status, delivery **OTP**, customer **mobile**, and delivery address — across one or more Flipkart
 accounts. Filter by status/date/search and export everything to **CSV / Excel**.
 
+> **New: zero-setup Chrome extension.** A fully client-side public Chrome extension now lives in
+> [`extension/`](extension/README.md) — same board, but **no Docker, no backend, and no cookie
+> export**. It reads your orders using the Flipkart session you're already logged into. The Docker
+> app below still works and remains the setup until the extension is verified in your browser and
+> published (see `docs/plans/2026-07-06-flipkart-public-chrome-extension.md`).
+
 - A single order ID can appear as **several rows** (one per unit/shipment), each with its own
   tracking ID, item, status, OTP and mobile.
 - If a shipment has an **OTP**, it is treated as **Out for Delivery**.
