@@ -39,6 +39,21 @@ export interface AccountResult {
   ok: boolean;
   count: number; // today's matched orders from this account
   error?: { code: ErrorCode; message: string };
+  pending?: boolean; // background poller hasn't completed a first fetch for this account yet
+  fetchedAt?: string | null; // ISO of this account's last completed fetch
+}
+
+// Aggregate progress of the background refresh loop across all accounts.
+export interface Coverage {
+  total: number;
+  fetched: number; // accounts with at least one completed fetch
+  pending: number; // accounts not yet fetched once
+  ok: number;
+  failed: number;
+  inFlight: number; // accounts currently being fetched
+  oldestFetchedAt: string | null;
+  newestFetchedAt: string | null;
+  intervalSeconds: number; // per-account refresh cadence
 }
 
 // Account metadata for the UI; never carries cookie values.
@@ -53,6 +68,7 @@ export interface OrdersResponse {
   ok: true;
   orders: Order[]; // union across accounts, each tagged with .account
   accounts: AccountResult[];
+  coverage: Coverage;
   fetchedAt: string; // ISO
   timezone: string;
 }

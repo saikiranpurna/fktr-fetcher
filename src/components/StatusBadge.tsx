@@ -1,16 +1,19 @@
 import { STATUS_LABELS, type OrderStatus } from "@/lib/types";
+import { TONE_CHIP, type Tone } from "@/lib/ui";
 
-const CLASS: Record<OrderStatus, string> = {
-  OUT_FOR_DELIVERY: "bg-amber-100 text-amber-800 ring-amber-300",
-  DELIVERED: "bg-green-100 text-green-800 ring-green-300",
-  ARRIVING: "bg-blue-100 text-blue-800 ring-blue-300",
-  OTHER: "bg-gray-100 text-gray-700 ring-gray-300",
+// Order status -> shared tone (dark-mode-safe via TONE_CHIP). Out-for-delivery is the amber
+// "act now" state, delivered is green, arriving is informational blue, everything else neutral.
+const TONE_BY_STATUS: Record<OrderStatus, Tone> = {
+  OUT_FOR_DELIVERY: "pending",
+  DELIVERED: "ok",
+  ARRIVING: "info",
+  OTHER: "neutral",
 };
 
 export function StatusBadge({ status }: { status: OrderStatus }) {
   return (
     <span
-      className={`inline-flex items-center rounded-full px-2.5 py-1 text-xs font-semibold ring-1 ring-inset ${CLASS[status]}`}
+      className={`inline-flex items-center rounded-full px-2.5 py-1 text-xs font-semibold ring-1 ring-inset ${TONE_CHIP[TONE_BY_STATUS[status]]}`}
     >
       {STATUS_LABELS[status]}
     </span>

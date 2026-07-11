@@ -6,11 +6,12 @@ export function OrderCard({ order }: { order: Order }) {
     <article className="flex flex-col gap-3 rounded-xl border border-black/10 bg-white p-4 shadow-sm dark:border-white/15 dark:bg-neutral-900">
       <div className="flex items-start justify-between gap-2">
         <div className="flex min-w-0 flex-col">
-          <span className="font-mono text-sm text-neutral-500 dark:text-neutral-400">
-            {order.orderId}
+          <span className="truncate text-base font-bold text-neutral-900 dark:text-neutral-100">
+            {order.customerName}
           </span>
+          <span className="font-mono text-[11px] text-neutral-500 dark:text-neutral-400">{order.orderId}</span>
           {order.trackingId && (
-            <span className="font-mono text-[11px] text-neutral-400 dark:text-neutral-500">
+            <span className="font-mono text-[11px] text-neutral-500 dark:text-neutral-400">
               {order.trackingId}
             </span>
           )}
@@ -23,27 +24,24 @@ export function OrderCard({ order }: { order: Order }) {
       </span>
 
       <div className="space-y-1">
-        <p className="text-base font-bold text-neutral-900 dark:text-neutral-100">
-          {order.customerName}
-        </p>
         <p className="text-sm text-neutral-700 dark:text-neutral-300">{order.itemName}</p>
-        <p className="break-words text-sm text-neutral-500 dark:text-neutral-400">
-          {order.deliveryAddress}
-        </p>
+        <p className="break-words text-sm text-neutral-500 dark:text-neutral-400">{order.deliveryAddress}</p>
         {order.phone && (
           <p className="text-sm text-neutral-600 dark:text-neutral-300">Mobile: {order.phone}</p>
         )}
       </div>
 
       <div className="mt-auto rounded-lg bg-neutral-100 px-3 py-2 dark:bg-neutral-800">
-        <span className="block text-[11px] font-medium uppercase tracking-wide text-neutral-500 dark:text-neutral-400">
+        <span className="block text-[11px] font-medium uppercase tracking-wide text-neutral-600 dark:text-neutral-400">
           OTP
         </span>
-        <span
-          className="font-mono text-2xl font-extrabold tracking-widest text-neutral-900 dark:text-neutral-50"
-          aria-label={order.otp ? `OTP ${order.otp}` : "OTP unavailable"}
-        >
-          {order.otp ?? "—"}
+        <span className="font-mono text-2xl font-extrabold tracking-widest text-neutral-900 dark:text-neutral-50">
+          {order.otp ?? (
+            <>
+              <span aria-hidden>—</span>
+              <span className="sr-only">unavailable</span>
+            </>
+          )}
         </span>
       </div>
     </article>

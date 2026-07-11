@@ -6,6 +6,8 @@ account cookies plus Flipkart's custom `x-user-agent` (FKUA) header.
 
 from __future__ import annotations
 
+import threading
+import time
 from urllib.parse import urlencode
 
 from scrapling.fetchers import Fetcher
@@ -13,6 +15,11 @@ from scrapling.fetchers import Fetcher
 from .config import config
 from .errors import auth_expired, upstream
 from .parser import ensure_orders_shape, extract_detail, orders_array
+
+# Global cap on concurrent Flipkart HTTP requests across ALL account fetches (list + detail).
+# Without it, fetch_concurrency (16) accounts each spinning an 8-worker detail pool would open
+# ~144 simultaneous connections and invite rate-limiting/bans. This bounds the real load.
+_conn = threading.BoundedSemaphore(config.max_flipkart_conns)
 
 
 def _headers(extra: dict | None = None) -> dict:
@@ -28,12 +35,15 @@ def _headers(extra: dict | None = None) -> dict:
 
 
 def _get(url: str, cookies: dict):
-    return Fetcher.get(url, headers=_headers(), cookies=cookies, timeout=config.timeout,
-                       impersonate=config.impersonate, stealthy_headers=False)
+    with _conn:
+        return Fetcher.get(url, headers=_headers(), cookies=cookies, timeout=config.timeout,
+                           impersonate=config.impersonate, stealthy_headers=False)
 
 
-def fetch_orders(cookies: dict) -> list[dict]:
-    """Paginate My Orders (7/page) following `nextCallParams`, up to config.max_pages."""
+def fetch_orders(cookies: dict, deadline: float | None = None) -> list[dict]:
+    """Paginate My Orders (7/page) following `nextCallParams`, up to config.max_pages.
+    Stops early once `deadline` (a time.monotonic() value) passes so one slow account can't
+    hold a worker indefinitely — page 1 is always fetched, then remaining pages are best-effort."""
     base = config.orders_base
     seen: set[str] = set()
     all_orders: list[dict] = []
@@ -41,6 +51,8 @@ def fetch_orders(cookies: dict) -> list[dict]:
     page = 1
 
     for i in range(config.max_pages):
+        if i > 0 and deadline is not None and time.monotonic() > deadline:
+            break
         res = _get(url, cookies)
         status = getattr(res, "status", 0)
         if status in (401, 403):
@@ -96,15 +108,16 @@ def fetch_detail(cookies: dict, order_id: str, unit_id: str, share_token: str = 
         },
     }
     try:
-        res = Fetcher.post(
-            config.detail_url,
-            headers=_headers({"content-type": "application/json"}),
-            cookies=cookies,
-            json=body,
-            timeout=config.timeout,
-            impersonate=config.impersonate,
-            stealthy_headers=False,
-        )
+        with _conn:
+            res = Fetcher.post(
+                config.detail_url,
+                headers=_headers({"content-type": "application/json"}),
+                cookies=cookies,
+                json=body,
+                timeout=config.timeout,
+                impersonate=config.impersonate,
+                stealthy_headers=False,
+            )
         if getattr(res, "status", 0) != 200:
             return {}
         detail = extract_detail(res.json())

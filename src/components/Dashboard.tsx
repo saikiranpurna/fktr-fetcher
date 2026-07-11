@@ -12,6 +12,7 @@ import type {
   AccountMeta,
   AccountResult,
   AccountsResponse,
+  Coverage,
   ErrorCode,
   ErrorResponse,
   Order,
@@ -26,6 +27,15 @@ import { RefreshBar } from "./RefreshBar";
 const POLL_MS = 60_000;
 const DEFAULT_TZ = "Asia/Kolkata";
 
+// Operator-facing text for internal error codes (no raw enums in the UI).
+const ERROR_TEXT: Record<ErrorCode, string> = {
+  AUTH_EXPIRED: "session expired",
+  UPSTREAM_ERROR: "couldn't reach Flipkart",
+  PARSE_ERROR: "unexpected response",
+  CONFIG_ERROR: "not configured",
+  UNKNOWN: "unknown error",
+};
+
 export function Dashboard() {
   const [orders, setOrders] = useState<Order[]>([]);
   const [loading, setLoading] = useState(false);
@@ -36,6 +46,7 @@ export function Dashboard() {
   const [autoRefresh, setAutoRefresh] = useState(false);
   const [accountMetas, setAccountMetas] = useState<AccountMeta[]>([]);
   const [accountStatuses, setAccountStatuses] = useState<AccountResult[]>([]);
+  const [coverage, setCoverage] = useState<Coverage | null>(null);
   const [filters, setFilters] = useState<OrderFilterState>(DEFAULT_FILTERS);
 
   const visible = useMemo(
@@ -61,6 +72,7 @@ export function Dashboard() {
       if (body.ok) {
         setOrders(body.orders);
         setAccountStatuses(body.accounts);
+        setCoverage(body.coverage);
         setTimezone(body.timezone || DEFAULT_TZ);
         setLastFetchedAt(body.fetchedAt);
         setError(null);
@@ -92,7 +104,10 @@ export function Dashboard() {
     }
   }, [orders, filters, timezone]);
 
+  // Initial load: fetch orders + accounts once on mount. The loading flag set inside fetchOrders
+  // is the intended one-time render; this rule targets sync state sync, not mount data-fetching.
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- canonical fetch-on-mount
     void fetchOrders();
     void loadAccounts();
   }, [fetchOrders, loadAccounts]);
@@ -108,7 +123,13 @@ export function Dashboard() {
     void fetchOrders();
   }, [loadAccounts, fetchOrders]);
 
-  const failedAccounts = accountStatuses.filter((a) => !a.ok);
+  // Pending accounts (not yet fetched by the poller) are not failures — exclude them.
+  const failedAccounts = accountStatuses.filter((a) => !a.ok && !a.pending);
+  const isDefaultFilters =
+    filters.statuses.length === 0 &&
+    filters.date === "all" &&
+    filters.accounts.length === 0 &&
+    filters.search === "";
 
   return (
     <div className="mx-auto flex w-full max-w-6xl flex-1 flex-col gap-4 p-4 sm:p-6">
@@ -116,8 +137,12 @@ export function Dashboard() {
         <h1 className="text-lg font-bold text-neutral-900 sm:text-xl dark:text-neutral-100">
           Flipkart Delivery Tracker
         </h1>
-        <span className="text-xs font-medium text-neutral-400 dark:text-neutral-500">
-          {lastFetchedAt ? "Live" : ""}
+        <span className="inline-flex items-center gap-1.5 text-xs font-medium text-neutral-500 dark:text-neutral-400">
+          <span
+            aria-hidden
+            className={`h-2 w-2 rounded-full ${lastFetchedAt ? "bg-green-500" : "bg-neutral-300 dark:bg-neutral-600"}`}
+          />
+          {lastFetchedAt ? "Live" : "Connecting…"}
         </span>
       </header>
 
@@ -131,6 +156,7 @@ export function Dashboard() {
         total={orders.length}
         onDownload={downloadCsv}
         downloading={downloading}
+        coverage={coverage}
       />
 
       <AccountsPanel accounts={accountMetas} statuses={accountStatuses} onChanged={onChanged} />
@@ -139,9 +165,14 @@ export function Dashboard() {
 
       {failedAccounts.length > 0 && (
         <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-800 dark:border-amber-500/40 dark:bg-amber-950/40 dark:text-amber-200">
-          {failedAccounts.length} account{failedAccounts.length === 1 ? "" : "s"} failed to load:{" "}
-          {failedAccounts.map((a) => `${a.label} (${a.error?.code})`).join(", ")}. Other accounts are
-          shown below.
+          <span className="font-medium tabular-nums">{failedAccounts.length}</span> account
+          {failedAccounts.length === 1 ? "" : "s"} need attention:{" "}
+          {failedAccounts
+            .slice(0, 5)
+            .map((a) => `${a.label} (${ERROR_TEXT[a.error?.code ?? "UNKNOWN"]})`)
+            .join(", ")}
+          {failedAccounts.length > 5 ? `, +${failedAccounts.length - 5} more` : ""}. See the Accounts
+          panel above.
         </div>
       )}
 
@@ -149,7 +180,11 @@ export function Dashboard() {
         <OrderFilters filters={filters} onChange={setFilters} accounts={accountLabels} />
       )}
 
-      <OrderList orders={visible} />
+      <OrderList
+        orders={visible}
+        hasFilters={!isDefaultFilters}
+        onClearFilters={() => setFilters(DEFAULT_FILTERS)}
+      />
     </div>
   );
 }

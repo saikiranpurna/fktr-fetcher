@@ -1,21 +1,55 @@
-# Full stack: Python (Scrapling) backend + Next.js frontend.
+# Full stack: MinIO (S3 cookie storage) + Python (Scrapling) backend + Next.js frontend.
 # Build/run:  docker compose up --build
-# Then open   http://localhost:3000   and drop each account's cookie .json in the Accounts panel.
+# Then open   http://localhost:3100   and drop each account's cookie .json/.txt in the Accounts panel.
+# MinIO console (optional): http://localhost:9001  (user/pass from MINIO_ROOT_USER/PASSWORD).
 
 services:
+  minio:
+    image: minio/minio:RELEASE.2025-09-07T16-13-09Z
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
+    volumes:
+      - minio:/data
+    ports:
+      - "9000:9000"   # S3 API
+      - "9001:9001"   # web console (http://localhost:9001)
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
   backend:
     build: ./backend
     environment:
+      # Cookies are stored as one object per account in MinIO (S3).
+      STORAGE_BACKEND: minio
+      MINIO_ENDPOINT: http://minio:9000
+      MINIO_ACCESS_KEY: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin}
+      MINIO_BUCKET: ${MINIO_BUCKET:-flipkart-cookies}
+      # Local-dev fallback path (used only if STORAGE_BACKEND=file).
       SESSION_STORE_PATH: /data/flipkart-session.json
       APP_TIMEZONE: ${APP_TIMEZONE:-Asia/Kolkata}
       FLIPKART_MAX_PAGES: ${FLIPKART_MAX_PAGES:-100}
       FLIPKART_MAX_DETAILS: ${FLIPKART_MAX_DETAILS:-40}
       FLIPKART_TIMEOUT_MS: ${FLIPKART_TIMEOUT_MS:-20000}
       ADMIN_TOKEN: ${ADMIN_TOKEN:-}
+      # Background poller: refresh each account every REFRESH_INTERVAL_S (default 30 min), fetching
+      # at most FETCH_CONCURRENCY accounts at once. Raise concurrency to tighten the cadence at
+      # 1000+ accounts (watch Flipkart rate limits).
+      REFRESH_INTERVAL_S: ${REFRESH_INTERVAL_S:-1800}
+      FETCH_CONCURRENCY: ${FETCH_CONCURRENCY:-16}
     volumes:
       - session:/data
     ports:
       - "8000:8000"   # exposed for debugging / direct API access
+    depends_on:
+      minio:
+        condition: service_healthy
     restart: unless-stopped
 
   frontend:
@@ -35,3 +69,4 @@ services:
 
 volumes:
   session:
+  minio:

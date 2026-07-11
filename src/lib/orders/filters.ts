@@ -5,11 +5,11 @@ export type DateScope = "all" | "today" | "tomorrow" | "next7" | "past7";
 export interface OrderFilters {
   statuses: OrderStatus[]; // empty = all statuses
   date: DateScope;
-  account: string; // "" = all accounts
+  accounts: string[]; // [] = all accounts; otherwise keep orders whose account is in this set
   search: string;
 }
 
-export const DEFAULT_FILTERS: OrderFilters = { statuses: [], date: "all", account: "", search: "" };
+export const DEFAULT_FILTERS: OrderFilters = { statuses: [], date: "all", accounts: [], search: "" };
 
 // "YYYY-MM-DD" for the given instant in the target timezone (en-CA yields ISO order).
 export function ymdInTz(date: Date, timeZone: string): string {
@@ -37,7 +37,7 @@ export function applyOrderFilters(
 
   return orders.filter((o) => {
     if (f.statuses.length > 0 && !f.statuses.includes(o.status)) return false;
-    if (f.account && o.account !== f.account) return false;
+    if (f.accounts.length > 0 && !f.accounts.includes(o.account)) return false;
 
     if (f.date !== "all") {
       const d = new Date(o.activityDateIso);

@@ -50,6 +50,35 @@ class Config:
     filter_type: str = os.environ.get("FLIPKART_FILTER_TYPE", "PREORDER_UNITS")
     # curl_cffi TLS-impersonation profile used by Scrapling's Fetcher.
     impersonate: str = os.environ.get("FLIPKART_IMPERSONATE", "chrome")
+    # ── Cookie storage backend ───────────────────────────────────────────────
+    # "minio" (S3 object storage) | "file" (single JSON doc) | "auto" (default: minio when
+    # MINIO_ENDPOINT is set, else file). Cookies are secrets — creds come from env only.
+    storage_backend: str = (os.environ.get("STORAGE_BACKEND", "auto") or "auto").strip().lower()
+    minio_endpoint: str = os.environ.get("MINIO_ENDPOINT", "").strip()
+    minio_access_key: str = os.environ.get("MINIO_ACCESS_KEY", "")
+    minio_secret_key: str = os.environ.get("MINIO_SECRET_KEY", "")
+    minio_bucket: str = os.environ.get("MINIO_BUCKET", "flipkart-cookies")
+    minio_region: str = os.environ.get("MINIO_REGION", "us-east-1")
+    # Object key prefix for per-account cookie objects (keep the trailing slash).
+    minio_prefix: str = os.environ.get("MINIO_PREFIX", "accounts/")
+    # ── Background poller ────────────────────────────────────────────────────
+    # Keeps a per-account order cache warm so /api/orders serves instantly at 1000+ accounts.
+    # Each account is refreshed at most once per this interval (seconds); default 30 min.
+    refresh_interval_s: float = float(max(30, _int("REFRESH_INTERVAL_S", 1800)))
+    # Max accounts fetched concurrently across the whole app (bounds threads + load on Flipkart).
+    fetch_concurrency: int = max(1, _int("FETCH_CONCURRENCY", 16))
+    # Scheduler tick, and how often the account roster (ids/cookies) is re-read from storage.
+    poller_tick_s: float = float(max(1, _int("POLLER_TICK_S", 2)))
+    # Periodic roster re-read is only a safety net — account add/import/delete call poller.wake()
+    # for instant pickup — so keep it infrequent to avoid a GET-per-object storage scan every tick.
+    roster_refresh_s: float = float(max(5, _int("ROSTER_REFRESH_S", 300)))
+    # Per-account wall-clock budget for one fetch; a slow/wedged account returns partial data
+    # instead of holding a worker forever (page 1 is always attempted).
+    account_deadline_s: float = float(max(10, _int("ACCOUNT_DEADLINE_S", 120)))
+    # Global cap on concurrent Flipkart HTTP requests (list + per-order detail across all workers).
+    max_flipkart_conns: int = max(1, _int("MAX_FLIPKART_CONNS", 32))
+    # Set POLLER_ENABLED=0 to disable the background poller (tests / debugging).
+    poller_enabled: bool = (os.environ.get("POLLER_ENABLED", "1").strip().lower() not in ("0", "false", "no"))
 
 
 config = Config()

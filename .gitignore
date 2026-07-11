@@ -50,3 +50,4 @@ __pycache__/
 backend/.venv/
 backend/.env.local
 *.json.tmp
+.superpowers

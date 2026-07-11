@@ -3,6 +3,7 @@
 import type { DateScope, OrderFilters as Filters } from "@/lib/orders/filters";
 import { DEFAULT_FILTERS } from "@/lib/orders/filters";
 import { STATUS_LABELS, type OrderStatus } from "@/lib/types";
+import { AccountFilter } from "./AccountFilter";
 
 const STATUS_ORDER: OrderStatus[] = ["OUT_FOR_DELIVERY", "ARRIVING", "DELIVERED", "OTHER"];
 const DATE_SCOPES: { value: DateScope; label: string }[] = [
@@ -33,7 +34,7 @@ export function OrderFilters({
   const isDefault =
     filters.statuses.length === 0 &&
     filters.date === "all" &&
-    filters.account === "" &&
+    filters.accounts.length === 0 &&
     filters.search === "";
 
   return (
@@ -75,18 +76,11 @@ export function OrderFilters({
         </select>
 
         {accounts.length > 1 && (
-          <select
-            value={filters.account}
-            onChange={(e) => onChange({ ...filters, account: e.target.value })}
-            className="max-w-52 rounded-lg border border-black/15 bg-neutral-50 px-2 py-1.5 text-sm dark:border-white/15 dark:bg-neutral-800"
-          >
-            <option value="">All accounts</option>
-            {accounts.map((a) => (
-              <option key={a} value={a}>
-                {a}
-              </option>
-            ))}
-          </select>
+          <AccountFilter
+            accounts={accounts}
+            selected={filters.accounts}
+            onChange={(next) => onChange({ ...filters, accounts: next })}
+          />
         )}
 
         <input

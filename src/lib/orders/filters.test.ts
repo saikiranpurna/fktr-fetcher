@@ -62,7 +62,7 @@ describe("applyOrderFilters", () => {
 
   it("filters by account and search, combinable with status", () => {
     expect(
-      applyOrderFilters(orders, { ...DEFAULT_FILTERS, account: "South" }, NOW, TZ).map((o) => o.orderId),
+      applyOrderFilters(orders, { ...DEFAULT_FILTERS, accounts: ["South"] }, NOW, TZ).map((o) => o.orderId),
     ).toEqual(["B"]);
     expect(
       applyOrderFilters(orders, { ...DEFAULT_FILTERS, search: "macbook" }, NOW, TZ).map((o) => o.orderId),
@@ -70,10 +70,20 @@ describe("applyOrderFilters", () => {
     // status + date together: OFD today
     const combo = applyOrderFilters(
       orders,
-      { statuses: ["OUT_FOR_DELIVERY"] as OrderStatus[], date: "today", account: "", search: "" },
+      { statuses: ["OUT_FOR_DELIVERY"] as OrderStatus[], date: "today", accounts: [], search: "" },
       NOW,
       TZ,
     );
     expect(combo.map((o) => o.orderId)).toEqual(["A"]);
+  });
+
+  it("filters by multiple accounts (union of the selected set)", () => {
+    const local: Order[] = [
+      order({ orderId: "N", account: "North" }),
+      order({ orderId: "S", account: "South" }),
+      order({ orderId: "E", account: "East" }),
+    ];
+    const out = applyOrderFilters(local, { ...DEFAULT_FILTERS, accounts: ["North", "East"] }, NOW, TZ);
+    expect(out.map((o) => o.orderId).sort()).toEqual(["E", "N"]);
   });
 });

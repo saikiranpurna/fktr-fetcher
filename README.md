@@ -61,12 +61,15 @@ The board is empty until you add an account cookie.
 
 1. In a normal browser, **log in** at <https://www.flipkart.com/>.
 2. Install a cookie exporter (e.g. the **Cookie-Editor** browser extension).
-3. On flipkart.com, open Cookie-Editor → **Export → JSON**. Save/copy the `.json`.
+3. On flipkart.com, open Cookie-Editor → **Export → JSON**. Save/copy the `.json` (a `.txt`
+   file with the same JSON, or a raw `name=value; name2=value2` cookie header, also works).
 4. Open the app (http://localhost:3100) → **Accounts** panel →
-   **drag the `.json` file onto the drop zone** (or click to choose). One file per account —
-   you can drop several at once.
+   **drag the file(s) onto the drop zone** (or click to choose). Each file may hold **one
+   account** (a Cookie-Editor export or raw header) **or many** — a single `.json`/`.txt`
+   holding an array/map of accounts is expanded automatically. Drop several files at once too.
 
-Orders load automatically. To add more accounts, drop more files; to remove one, click **Remove**.
+Orders load automatically. Cookies are saved as **one object per account in MinIO** (S3 object
+storage, bundled in Docker). To add more accounts, drop more files; to remove one, click **Remove**.
 
 > Cookies expire (Flipkart sessions are short-lived). When an account chip turns **red**
 > (“session expired”), just re-export the cookie and drop the new file in again.
@@ -102,11 +105,15 @@ root (Docker Compose reads it automatically), then edit:
 | `FLIPKART_MAX_DETAILS` | `40` | Extra address lookups for recent delivered orders (active/out-for-delivery orders always get theirs) |
 | `FLIPKART_TIMEOUT_MS` | `20000` | Per-request timeout |
 | `ADMIN_TOKEN` | *(blank)* | If set, adding/removing accounts requires this token (enter it in the Accounts panel). Leave blank for local use |
+| `MINIO_ROOT_USER` / `MINIO_ROOT_PASSWORD` | `minioadmin` | MinIO credentials (change before sharing) |
+| `MINIO_BUCKET` | `flipkart-cookies` | Bucket holding one cookie object per account |
 
 After changing `.env`: `docker compose up -d` (recreates with the new values).
 
-Your added cookies persist in a Docker volume named `session`, so they survive restarts and code
-updates.
+Your added cookies persist in **MinIO** (bucket `flipkart-cookies`, stored on the `minio` Docker
+volume), so they survive restarts and code updates. Without Docker the backend falls back to a
+local JSON file at `SESSION_STORE_PATH` (set `STORAGE_BACKEND=file`, or leave `auto` with no
+`MINIO_ENDPOINT`).
 
 ---
 
@@ -142,7 +149,7 @@ docker compose logs frontend --tail 50
 
 ## 8. How it works (for developers)
 
-Two services (see `docker-compose.yml`):
+Three services (see `docker-compose.yml`):
 
 - **`backend/`** — Python (**FastAPI** + **Scrapling**/`curl_cffi`). Calls Flipkart's internal
   *My Orders* JSON APIs over plain HTTP using the account cookie + Flipkart's `x-user-agent` (FKUA)
@@ -150,6 +157,9 @@ Two services (see `docker-compose.yml`):
   mobile, and live OTP. **No headless browser.** One order is exploded into one row per unit.
 - **repo root** — **Next.js** frontend (UI only). In Docker the browser calls the backend directly
   (`NEXT_PUBLIC_BACKEND_URL`, baked at build) so long refreshes aren't cut off by the dev proxy.
+- **`minio`** — **MinIO** (S3-compatible object storage). Persists each account's cookies as a
+  JSON object (`accounts/<id>.json`) in the `flipkart-cookies` bucket; the backend auto-creates the
+  bucket on startup. Optional web console at http://localhost:9001.
 
 Backend API:
 
@@ -158,6 +168,7 @@ Backend API:
 | GET | `/api/orders` | `{ ok, orders[], accounts[], fetchedAt, timezone }` |
 | GET | `/api/accounts` | `{ accounts[] }` |
 | POST | `/api/accounts` | body `{ label, cookie }` (+ `x-admin-token` if `ADMIN_TOKEN` set) |
+| POST | `/api/accounts/import` | body `{ label?, content }` — `content` is a raw file blob; expands a single **or** multi-account `.json`/`.txt` (returns `{ accounts, imported }`) |
 | DELETE | `/api/accounts?id=…` | omit `id` to clear all |
 | GET | `/api/health` | liveness + account count |
 
