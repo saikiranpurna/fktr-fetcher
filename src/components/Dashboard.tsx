@@ -16,6 +16,7 @@ import type {
   ErrorCode,
   ErrorResponse,
   Order,
+  OrderStatus,
   OrdersResponse,
 } from "@/lib/types";
 import { AccountsPanel } from "./AccountsPanel";
@@ -48,12 +49,20 @@ export function Dashboard() {
   const [accountStatuses, setAccountStatuses] = useState<AccountResult[]>([]);
   const [coverage, setCoverage] = useState<Coverage | null>(null);
   const [filters, setFilters] = useState<OrderFilterState>(DEFAULT_FILTERS);
+  const [tab, setTab] = useState<"orders" | "accounts">("orders");
 
   const visible = useMemo(
     () => applyOrderFilters(orders, filters, new Date(), timezone),
     [orders, filters, timezone],
   );
   const accountLabels = useMemo(() => accountStatuses.map((a) => a.label), [accountStatuses]);
+  // Total count per status across all fetched orders (unaffected by the active filters),
+  // so the chips answer "how many are cancelled / delivered / …" at a glance.
+  const statusCounts = useMemo(() => {
+    const counts: Partial<Record<OrderStatus, number>> = {};
+    for (const o of orders) counts[o.status] = (counts[o.status] ?? 0) + 1;
+    return counts;
+  }, [orders]);
 
   const loadAccounts = useCallback(async () => {
     try {
@@ -146,45 +155,122 @@ export function Dashboard() {
         </span>
       </header>
 
-      <RefreshBar
-        loading={loading}
-        lastFetchedAt={lastFetchedAt}
-        autoRefresh={autoRefresh}
-        onRefresh={() => void fetchOrders()}
-        onToggleAuto={setAutoRefresh}
-        count={visible.length}
-        total={orders.length}
-        onDownload={downloadCsv}
-        downloading={downloading}
-        coverage={coverage}
-      />
+      <div
+        role="tablist"
+        aria-label="Dashboard sections"
+        onKeyDown={(e) => {
+          let next: "orders" | "accounts" | null = null;
+          if (e.key === "ArrowRight" || e.key === "ArrowLeft") next = tab === "orders" ? "accounts" : "orders";
+          else if (e.key === "Home") next = "orders";
+          else if (e.key === "End") next = "accounts";
+          if (!next) return;
+          e.preventDefault();
+          setTab(next);
+          const id = `tab-${next}`;
+          requestAnimationFrame(() => document.getElementById(id)?.focus());
+        }}
+        className="flex gap-1 border-b border-black/10 dark:border-white/15"
+      >
+        <button
+          type="button"
+          role="tab"
+          id="tab-orders"
+          aria-selected={tab === "orders"}
+          aria-controls="panel-orders"
+          tabIndex={tab === "orders" ? 0 : -1}
+          onClick={() => setTab("orders")}
+          className={`-mb-px inline-flex items-center gap-2 rounded-t px-3 py-2 text-sm font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 ${
+            tab === "orders"
+              ? "border-b-2 border-blue-600 text-blue-700 dark:text-blue-300"
+              : "border-b-2 border-transparent text-neutral-500 hover:text-neutral-800 dark:text-neutral-400 dark:hover:text-neutral-100"
+          }`}
+        >
+          Orders
+          <span className="rounded-full bg-neutral-100 px-2 py-0.5 text-xs font-medium tabular-nums text-neutral-600 dark:bg-neutral-800 dark:text-neutral-300">
+            {orders.length}
+          </span>
+        </button>
+        <button
+          type="button"
+          role="tab"
+          id="tab-accounts"
+          aria-selected={tab === "accounts"}
+          aria-controls="panel-accounts"
+          tabIndex={tab === "accounts" ? 0 : -1}
+          onClick={() => setTab("accounts")}
+          className={`-mb-px inline-flex items-center gap-2 rounded-t px-3 py-2 text-sm font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 ${
+            tab === "accounts"
+              ? "border-b-2 border-blue-600 text-blue-700 dark:text-blue-300"
+              : "border-b-2 border-transparent text-neutral-500 hover:text-neutral-800 dark:text-neutral-400 dark:hover:text-neutral-100"
+          }`}
+        >
+          Accounts
+          <span className="rounded-full bg-neutral-100 px-2 py-0.5 text-xs font-medium tabular-nums text-neutral-600 dark:bg-neutral-800 dark:text-neutral-300">
+            {accountMetas.length}
+          </span>
+          {failedAccounts.length > 0 && (
+            <span
+              title={`${failedAccounts.length} need attention`}
+              className="rounded-full bg-amber-100 px-2 py-0.5 text-xs font-semibold tabular-nums text-amber-800 dark:bg-amber-950/60 dark:text-amber-300"
+            >
+              {failedAccounts.length}
+            </span>
+          )}
+        </button>
+      </div>
 
-      <AccountsPanel accounts={accountMetas} statuses={accountStatuses} onChanged={onChanged} />
+      <div
+        id="panel-orders"
+        role="tabpanel"
+        aria-labelledby="tab-orders"
+        className={`flex-col gap-4 ${tab === "orders" ? "flex" : "hidden"}`}
+      >
+          <RefreshBar
+            loading={loading}
+            lastFetchedAt={lastFetchedAt}
+            autoRefresh={autoRefresh}
+            onRefresh={() => void fetchOrders()}
+            onToggleAuto={setAutoRefresh}
+            count={visible.length}
+            total={orders.length}
+            onDownload={downloadCsv}
+            downloading={downloading}
+            coverage={coverage}
+          />
 
-      {error && <ErrorNotice code={error.code} message={error.message} />}
+          {error && <ErrorNotice code={error.code} message={error.message} />}
 
-      {failedAccounts.length > 0 && (
-        <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-800 dark:border-amber-500/40 dark:bg-amber-950/40 dark:text-amber-200">
-          <span className="font-medium tabular-nums">{failedAccounts.length}</span> account
-          {failedAccounts.length === 1 ? "" : "s"} need attention:{" "}
-          {failedAccounts
-            .slice(0, 5)
-            .map((a) => `${a.label} (${ERROR_TEXT[a.error?.code ?? "UNKNOWN"]})`)
-            .join(", ")}
-          {failedAccounts.length > 5 ? `, +${failedAccounts.length - 5} more` : ""}. See the Accounts
-          panel above.
-        </div>
-      )}
+          {orders.length > 0 && (
+            <OrderFilters filters={filters} onChange={setFilters} accounts={accountLabels} statusCounts={statusCounts} />
+          )}
 
-      {orders.length > 0 && (
-        <OrderFilters filters={filters} onChange={setFilters} accounts={accountLabels} />
-      )}
+          <OrderList
+            orders={visible}
+            hasFilters={!isDefaultFilters}
+            onClearFilters={() => setFilters(DEFAULT_FILTERS)}
+          />
+      </div>
 
-      <OrderList
-        orders={visible}
-        hasFilters={!isDefaultFilters}
-        onClearFilters={() => setFilters(DEFAULT_FILTERS)}
-      />
+      <div
+        id="panel-accounts"
+        role="tabpanel"
+        aria-labelledby="tab-accounts"
+        className={`flex-col gap-4 ${tab === "accounts" ? "flex" : "hidden"}`}
+      >
+          {failedAccounts.length > 0 && (
+            <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-800 dark:border-amber-500/40 dark:bg-amber-950/40 dark:text-amber-200">
+              <span className="font-medium tabular-nums">{failedAccounts.length}</span> account
+              {failedAccounts.length === 1 ? "" : "s"} need attention:{" "}
+              {failedAccounts
+                .slice(0, 5)
+                .map((a) => `${a.label} (${ERROR_TEXT[a.error?.code ?? "UNKNOWN"]})`)
+                .join(", ")}
+              {failedAccounts.length > 5 ? `, +${failedAccounts.length - 5} more` : ""}.
+            </div>
+          )}
+
+          <AccountsPanel accounts={accountMetas} statuses={accountStatuses} onChanged={onChanged} />
+      </div>
     </div>
   );
 }

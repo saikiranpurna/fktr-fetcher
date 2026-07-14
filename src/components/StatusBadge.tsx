@@ -7,6 +7,7 @@ const TONE_BY_STATUS: Record<OrderStatus, Tone> = {
   OUT_FOR_DELIVERY: "pending",
   DELIVERED: "ok",
   ARRIVING: "info",
+  CANCELLED: "error",
   OTHER: "neutral",
 };
 

@@ -27,6 +27,7 @@ const orders: Order[] = [
   order({ orderId: "B", status: "DELIVERED", activityDateIso: "2026-07-02T11:00:00+05:30", account: "South", itemName: "MacBook" }),
   order({ orderId: "C", status: "ARRIVING", activityDateIso: "2026-07-04T20:00:00+05:30" }), // tomorrow
   order({ orderId: "D", status: "OTHER", activityDateIso: "2026-07-03T10:00:00+05:30" }),
+  order({ orderId: "E", status: "CANCELLED", activityDateIso: "2026-06-01T08:00:00+05:30" }), // well before every tested window
 ];
 
 describe("ymdInTz", () => {
@@ -38,12 +39,16 @@ describe("ymdInTz", () => {
 
 describe("applyOrderFilters", () => {
   it("returns everything with default filters", () => {
-    expect(applyOrderFilters(orders, DEFAULT_FILTERS, NOW, TZ)).toHaveLength(4);
+    expect(applyOrderFilters(orders, DEFAULT_FILTERS, NOW, TZ)).toHaveLength(5);
   });
 
   it("filters by status", () => {
-    const out = applyOrderFilters(orders, { ...DEFAULT_FILTERS, statuses: ["ARRIVING"] }, NOW, TZ);
-    expect(out.map((o) => o.orderId)).toEqual(["C"]);
+    expect(
+      applyOrderFilters(orders, { ...DEFAULT_FILTERS, statuses: ["ARRIVING"] }, NOW, TZ).map((o) => o.orderId),
+    ).toEqual(["C"]);
+    expect(
+      applyOrderFilters(orders, { ...DEFAULT_FILTERS, statuses: ["CANCELLED"] }, NOW, TZ).map((o) => o.orderId),
+    ).toEqual(["E"]);
   });
 
   it("filters by date (today vs tomorrow)", () => {

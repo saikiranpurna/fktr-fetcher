@@ -11,6 +11,7 @@ const HEADERS = [
   "OTP",
   "Status",
   "Activity Date",
+  "GSTIN",
 ];
 
 // RFC-4180 escaping: wrap in quotes and double inner quotes when the cell contains
@@ -34,6 +35,7 @@ export function ordersToCsv(orders: Order[]): string {
         o.otp ?? "",
         STATUS_LABELS[o.status],
         o.activityDateIso,
+        o.gstin ?? "",
       ]
         .map(csvCell)
         .join(","),

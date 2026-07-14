@@ -5,7 +5,7 @@ import { DEFAULT_FILTERS } from "@/lib/orders/filters";
 import { STATUS_LABELS, type OrderStatus } from "@/lib/types";
 import { AccountFilter } from "./AccountFilter";
 
-const STATUS_ORDER: OrderStatus[] = ["OUT_FOR_DELIVERY", "ARRIVING", "DELIVERED", "OTHER"];
+const STATUS_ORDER: OrderStatus[] = ["OUT_FOR_DELIVERY", "ARRIVING", "DELIVERED", "CANCELLED", "OTHER"];
 const DATE_SCOPES: { value: DateScope; label: string }[] = [
   { value: "all", label: "All dates" },
   { value: "today", label: "Today" },
@@ -18,10 +18,12 @@ export function OrderFilters({
   filters,
   onChange,
   accounts,
+  statusCounts,
 }: {
   filters: Filters;
   onChange: (next: Filters) => void;
   accounts: string[];
+  statusCounts?: Partial<Record<OrderStatus, number>>;
 }) {
   function toggleStatus(s: OrderStatus) {
     const has = filters.statuses.includes(s);
@@ -54,6 +56,9 @@ export function OrderFilters({
               }`}
             >
               {STATUS_LABELS[s]}
+              {statusCounts?.[s] != null && (
+                <span className="ml-1 tabular-nums opacity-70">({statusCounts[s]})</span>
+              )}
             </button>
           );
         })}

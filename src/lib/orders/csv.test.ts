@@ -25,7 +25,7 @@ describe("ordersToCsv", () => {
     expect(csv.startsWith("\uFEFF")).toBe(true);
     const lines = csv.slice(1).split("\r\n");
     expect(lines[0]).toBe(
-      "Account,Order ID,Tracking ID,Customer Name,Item,Delivery Address,Mobile,OTP,Status,Activity Date",
+      "Account,Order ID,Tracking ID,Customer Name,Item,Delivery Address,Mobile,OTP,Status,Activity Date,GSTIN",
     );
     // Address has a comma -> must be quoted.
     expect(lines[1]).toContain('"12 MG Road, Bengaluru"');
@@ -42,5 +42,17 @@ describe("ordersToCsv", () => {
     expect(row).toContain("Delivered");
     // Account,OrderID,"A ""B"" C",Item,"...",<empty otp>,Delivered,date
     expect(row.split(",").length).toBeGreaterThanOrEqual(8);
+  });
+
+  it("appends the GSTIN column with its value", () => {
+    const csv = ordersToCsv([order({ gstin: "36ABFFK3014J1ZH" })]);
+    const lines = csv.slice(1).split("\r\n");
+    expect(lines[0].endsWith("GSTIN")).toBe(true);
+    expect(lines[1].endsWith("36ABFFK3014J1ZH")).toBe(true);
+  });
+
+  it("leaves the GSTIN column empty for an order without GST details", () => {
+    const row = ordersToCsv([order({})]).slice(1).split("\r\n")[1];
+    expect(row.endsWith(",")).toBe(true); // trailing empty GSTIN cell
   });
 });

@@ -121,7 +121,8 @@ def fetch_detail(cookies: dict, order_id: str, unit_id: str, share_token: str = 
         if getattr(res, "status", 0) != 200:
             return {}
         detail = extract_detail(res.json())
-        return detail if (detail.get("address") or detail.get("otp")) else {}
+        gst = detail.get("gst") or {}
+        return detail if (detail.get("address") or detail.get("otp") or gst.get("gstin")) else {}
     except Exception:
         # best-effort: a single detail failure just leaves that order without an address
         return {}

@@ -112,3 +112,36 @@ def test_has_accounts(file_store):
     assert store.has_accounts() is False
     store.import_accounts("acct", "SN=1")
     assert store.has_accounts() is True
+
+
+# ── set_active: pause/resume without deleting cookies ─────────────────────────
+
+
+def test_new_accounts_are_active_by_default(file_store):
+    _, meta = store.import_accounts("acct", "SN=1")
+    assert meta[0]["active"] is True
+
+
+def test_set_inactive_excludes_from_fetch_roster_but_keeps_record(file_store):
+    store.import_accounts("acct", "SN=1")
+    aid = store.list_accounts()[0]["id"]
+    meta = store.set_active([aid], False)
+    assert meta[0]["active"] is False
+    # Cookies retained, but the poller's fetch roster no longer includes it.
+    assert store.get_active_accounts() == []
+    assert store.list_accounts()[0]["count"] == 1
+
+
+def test_reactivate_restores_fetch_roster(file_store):
+    store.import_accounts("acct", "SN=1")
+    aid = store.list_accounts()[0]["id"]
+    store.set_active([aid], False)
+    store.set_active([aid], True)
+    assert [a["id"] for a in store.get_active_accounts()] == [aid]
+
+
+def test_set_active_targets_only_named_ids(file_store):
+    store.import_accounts("file", '[{"label":"mom","cookie":"SN=1"},{"label":"dad","cookie":"SN=2"}]')
+    store.set_active(["mom"], False)
+    by_id = {m["id"]: m["active"] for m in store.list_accounts()}
+    assert by_id == {"mom": False, "dad": True}

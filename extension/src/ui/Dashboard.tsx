@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import type { ErrorCode, Order } from "@core/types";
+import type { ErrorCode, Order, OrderStatus } from "@core/types";
 import { ordersToCsv } from "@core/orders/csv";
 import {
   applyOrderFilters,
@@ -41,6 +41,11 @@ export function Dashboard() {
     [orders, filters, timezone],
   );
   const accountLabels = useMemo(() => snapshots.map((s) => s.label), [snapshots]);
+  const statusCounts = useMemo(() => {
+    const counts: Partial<Record<OrderStatus, number>> = {};
+    for (const o of orders) counts[o.status] = (counts[o.status] ?? 0) + 1;
+    return counts;
+  }, [orders]);
 
   const reload = useCallback(async () => {
     try {
@@ -179,7 +184,7 @@ export function Dashboard() {
       )}
 
       {orders.length > 0 && (
-        <OrderFilters filters={filters} onChange={setFilters} accounts={accountLabels} />
+        <OrderFilters filters={filters} onChange={setFilters} accounts={accountLabels} statusCounts={statusCounts} />
       )}
 
       {snapshots.length === 0 && !loading ? (

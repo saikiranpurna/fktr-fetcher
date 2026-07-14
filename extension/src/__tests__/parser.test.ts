@@ -5,12 +5,14 @@ import detailDelivered from "../__fixtures__/detail-delivered.json";
 import {
   mapStatus,
   extractDetail,
+  extractGst,
   formatAddress,
   ordersArray,
   parseOrders,
   ensureOrdersShape,
 } from "../core/parser";
 import { AppError } from "../core/errors";
+import { ordersToCsv } from "@core/orders/csv";
 import type { ParsedOrder } from "@core/types";
 
 describe("mapStatus", () => {
@@ -21,7 +23,34 @@ describe("mapStatus", () => {
   it("maps arriving / delivered / other", () => {
     expect(mapStatus("Arriving today by 11 pm")).toBe("ARRIVING");
     expect(mapStatus("Delivered on Sun Jul 05")).toBe("DELIVERED");
-    expect(mapStatus("Cancelled")).toBe("OTHER");
+    expect(mapStatus("Payment pending")).toBe("OTHER");
+  });
+  it("maps cancellation variants to CANCELLED", () => {
+    expect(mapStatus("Cancelled")).toBe("CANCELLED");
+    expect(mapStatus("Order cancellation requested")).toBe("CANCELLED");
+    expect(mapStatus("CANCELLED_BY_SELLER")).toBe("CANCELLED");
+  });
+  it("does not flag return/replacement/negation headings as CANCELLED", () => {
+    expect(mapStatus("Return cancelled")).not.toBe("CANCELLED");
+    expect(mapStatus("Replacement cancelled")).not.toBe("CANCELLED");
+    expect(mapStatus("Cancellation window closed")).not.toBe("CANCELLED");
+  });
+});
+
+describe("extractGst", () => {
+  it("reads Flipkart's live 'GST details' shape (gstNumber)", () => {
+    const detail = { ewbNumber: null, gstFieldTitle: "GST Number", gstNumber: "36ABFFK3014J1ZH", heading: "GST details" };
+    expect(extractGst(detail).gstin).toBe("36ABFFK3014J1ZH");
+  });
+  it("finds a GSTIN by its 15-char format anywhere in the tree", () => {
+    expect(extractGst({ a: { b: { taxId: "29ABCDE1234F1Z5" } } }).gstin).toBe("29ABCDE1234F1Z5");
+  });
+  it("finds a GSTIN inside an array value", () => {
+    expect(extractGst({ gstDetails: ["36ABFFK3014J1ZH"] }).gstin).toBe("36ABFFK3014J1ZH");
+  });
+  it("returns blank and never mistakes a tracking id or A/B noise for a GSTIN", () => {
+    expect(extractGst({ trackingId: "FMPP4118839140" })).toEqual({ gstin: "" });
+    expect(extractGst({ invoice_eta_comms: { abId: "STG|launchedGroup|85e070c7|h" } })).toEqual({ gstin: "" });
   });
 });
 
@@ -98,5 +127,16 @@ describe("ensureOrdersShape", () => {
       expect(e).toBeInstanceOf(AppError);
       expect((e as AppError).code).toBe("PARSE_ERROR");
     }
+  });
+});
+
+describe("GST end-to-end (detail JSON -> parseOrders -> CSV)", () => {
+  it("carries the order's GST number into the CSV", () => {
+    const raw = [
+      { orderMetaData: { orderId: "OD1" }, units: { u1: { metaData: { moRedesignHeading: "Delivered", trackingId: "FMPPX" } } } },
+    ];
+    const details = { OD1: { u1: { gst: { gstin: "36ABFFK3014J1ZH" } } } };
+    const orders = parseOrders(raw, details).map((o) => ({ ...o, account: "Acct" }));
+    expect(ordersToCsv(orders)).toContain("36ABFFK3014J1ZH");
   });
 });

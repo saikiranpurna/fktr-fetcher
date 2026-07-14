@@ -50,6 +50,10 @@ def _s(v: Any) -> str:
 
 def map_status(raw_status: str) -> str:
     s = re.sub(r"[_-]+", " ", (raw_status or "").lower())
+    # A cancelled ORDER is CANCELLED, but a cancelled return/replacement or a negation
+    # ("cannot cancel", "cancellation window closed") is not — exclude those contexts.
+    if re.search(r"cancel", s) and not re.search(r"return|replacement|pickup|cannot|window", s):
+        return "CANCELLED"
     if "out for delivery" in s:
         return "OUT_FOR_DELIVERY"
     # A failed attempt awaiting re-delivery is still an active, OTP-bearing delivery.
@@ -63,14 +67,15 @@ def map_status(raw_status: str) -> str:
 
 
 def _derive_status(headings: list[str]) -> tuple[str, str]:
-    arriving = delivered = False
+    arriving = delivered = cancelled = False
     for h in headings:
         mapped = map_status(h)
         if mapped == "OUT_FOR_DELIVERY":
             return "OUT_FOR_DELIVERY", h
         arriving = arriving or mapped == "ARRIVING"
         delivered = delivered or mapped == "DELIVERED"
-    status = "ARRIVING" if arriving else "DELIVERED" if delivered else "OTHER"
+        cancelled = cancelled or mapped == "CANCELLED"
+    status = "ARRIVING" if arriving else "DELIVERED" if delivered else "CANCELLED" if cancelled else "OTHER"
     match = next((h for h in headings if map_status(h) == status), None)
     return status, (match if match is not None else (headings[0] if headings else ""))
 
@@ -110,6 +115,45 @@ def detail_targets_for(order: dict) -> list[dict]:
     return targets
 
 
+# --- GST -------------------------------------------------------------------
+
+# A GSTIN is a fixed 15-char code: 2-digit state + 5 letters + 4 digits + letter + entity char
+# + 'Z' + checksum. Flipkart exposes it as `gstNumber` in the order-detail "GST details" section.
+# We prefer a value under a GST-named key, then fall back to any value matching the format, so a
+# key rename can't break us. (The tax invoice itself is a downloadable file, not JSON fields, so
+# invoice number/date are not available from the responses we fetch.)
+_GSTIN_RE = re.compile(r"^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][0-9A-Z]Z[0-9A-Z]$")
+
+
+def extract_gst(*sources: Any) -> dict:
+    """Extract the order's GST number. Returns {"gstin": ...} ("" when the order carries none)."""
+    keyed = ""
+    any_fmt = ""
+    stack = [s for s in sources if s is not None]
+    while stack:
+        n = stack.pop()
+        if isinstance(n, dict):
+            for k, v in n.items():
+                if isinstance(v, str):
+                    sv = v.strip().upper()
+                    if sv and _GSTIN_RE.match(sv):
+                        if "gst" in re.sub(r"[^a-z0-9]", "", _s(k).lower()):
+                            keyed = keyed or sv
+                        else:
+                            any_fmt = any_fmt or sv
+                elif isinstance(v, (dict, list)):
+                    stack.append(v)
+        elif isinstance(n, list):
+            for item in n:
+                if isinstance(item, str):
+                    sv = item.strip().upper()
+                    if sv and _GSTIN_RE.match(sv):
+                        any_fmt = any_fmt or sv
+                else:
+                    stack.append(item)
+    return {"gstin": keyed or any_fmt}
+
+
 # --- detail extraction (address + live OTP) ---------------------------------
 
 def extract_detail(detail_json: Any) -> dict:
@@ -131,7 +175,7 @@ def extract_detail(detail_json: Any) -> dict:
             stack.extend(n.values())
         elif isinstance(n, list):
             stack.extend(n)
-    return {"address": address, "otp": otp}
+    return {"address": address, "otp": otp, "gst": extract_gst(detail_json)}
 
 
 def _format_address(addr: Any) -> str:
@@ -195,6 +239,15 @@ def parse_orders(raw_orders: list, details: dict[str, dict]) -> list[dict]:
         phone = _s(order_address.get("phoneNumber")).strip() if isinstance(order_address, dict) else ""
         customer = _s(get(order, "accessToOrderDataBag.buyer.name")).strip() or "Unknown customer"
         order_date = get(order, "orderMetaData.orderDate")
+        # The GST number lives on the order-detail page; prefer it, fall back to the list entry.
+        gstin = ""
+        for d in unit_details.values():
+            dg = d.get("gst") if isinstance(d, dict) else None
+            if isinstance(dg, dict) and dg.get("gstin"):
+                gstin = dg["gstin"]
+                break
+        if not gstin:
+            gstin = extract_gst(order).get("gstin", "")
 
         for unit_id, u in real:
             heading = _s(get(u, "metaData.moRedesignHeading")).strip()
@@ -217,6 +270,7 @@ def parse_orders(raw_orders: list, details: dict[str, dict]) -> list[dict]:
                 "status": status,
                 "rawStatus": heading,
                 "activityDateIso": _to_iso(chosen_ms) or _to_iso(order_date) or "",
+                "gstin": gstin,
             })
     return out
 

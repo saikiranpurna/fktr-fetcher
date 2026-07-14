@@ -1,11 +1,11 @@
 // Ported from backend/app/service.py (_enrich_details). Decides which units need a
 // per-order detail call (address + live OTP) and runs them with bounded concurrency.
 import { CONFIG } from "@flk/core/config";
-import { get, isObj, mapStatus, str } from "@flk/core/parser";
+import { get, isObj, mapStatus, str, type GstDetails } from "@flk/core/parser";
 import { fetchDetail, type FetchLike } from "./flipkart";
 import { mapPool } from "./pool";
 
-type UnitDetail = { address?: unknown; otp?: string | null };
+type UnitDetail = { address?: unknown; otp?: string | null; gst?: GstDetails };
 type Target = { orderId: string; unitId: string; shareToken: string };
 
 /**
@@ -59,7 +59,7 @@ export async function enrichDetails(
 
   const details: Record<string, Record<string, UnitDetail>> = {};
   for (const { target, detail } of settled) {
-    if (detail.address || detail.otp) {
+    if (detail.address || detail.otp || detail.gst?.gstin) {
       (details[target.orderId] ??= {})[target.unitId] = detail;
     }
   }

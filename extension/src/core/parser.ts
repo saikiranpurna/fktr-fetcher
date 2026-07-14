@@ -44,6 +44,9 @@ export function str(v: unknown): string {
 
 export function mapStatus(rawStatus: string): OrderStatus {
   const s = (rawStatus || "").toLowerCase().replace(/[_-]+/g, " ");
+  // A cancelled ORDER is CANCELLED, but a cancelled return/replacement or a negation
+  // ("cannot cancel", "cancellation window closed") is not — exclude those contexts.
+  if (/cancel/.test(s) && !/return|replacement|pickup|cannot|window/.test(s)) return "CANCELLED";
   if (s.includes("out for delivery")) return "OUT_FOR_DELIVERY";
   // A failed attempt awaiting re-delivery is still an active, OTP-bearing delivery.
   if (/unsuccessful|retrying|reattempt|undelivered|delivery failed/.test(s)) return "OUT_FOR_DELIVERY";
@@ -80,11 +83,55 @@ export function detailTargetsFor(
   return targets;
 }
 
+// --- GST ---------------------------------------------------------------------
+
+// A GSTIN is a fixed 15-char code. Flipkart exposes it as `gstNumber` in the order-detail
+// "GST details" section. Prefer a value under a GST-named key, then any value matching the format.
+// (The tax invoice is a downloadable file, not JSON fields, so invoice number/date aren't here.)
+const GSTIN_RE = /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][0-9A-Z]Z[0-9A-Z]$/;
+
+export interface GstDetails {
+  gstin: string;
+}
+
+export function extractGst(...sources: unknown[]): GstDetails {
+  let keyed = "";
+  let anyFmt = "";
+  const stack: unknown[] = sources.filter((s) => s != null);
+  while (stack.length) {
+    const n = stack.pop();
+    if (isObj(n)) {
+      for (const [k, v] of Object.entries(n)) {
+        if (typeof v === "string") {
+          const sv = v.trim().toUpperCase();
+          if (sv && GSTIN_RE.test(sv)) {
+            if (k.toLowerCase().replace(/[^a-z0-9]/g, "").includes("gst")) keyed = keyed || sv;
+            else anyFmt = anyFmt || sv;
+          }
+        } else if (isObj(v) || Array.isArray(v)) {
+          stack.push(v);
+        }
+      }
+    } else if (Array.isArray(n)) {
+      for (const val of n) {
+        if (typeof val === "string") {
+          const sv = val.trim().toUpperCase();
+          if (sv && GSTIN_RE.test(sv)) anyFmt = anyFmt || sv;
+        } else {
+          stack.push(val);
+        }
+      }
+    }
+  }
+  return { gstin: keyed || anyFmt };
+}
+
 // --- detail extraction (address + live OTP) ---------------------------------
 
 export function extractDetail(detailJson: unknown): {
   address: Dict | null;
   otp: string | null;
+  gst: GstDetails;
 } {
   let address: Dict | null = null;
   let otp: string | null = null;
@@ -105,7 +152,7 @@ export function extractDetail(detailJson: unknown): {
       for (const val of n) stack.push(val);
     }
   }
-  return { address, otp };
+  return { address, otp, gst: extractGst(detailJson) };
 }
 
 export function formatAddress(addr: unknown): string {
@@ -140,7 +187,7 @@ export function ordersArray(body: unknown): unknown[] | null {
   return Array.isArray(arr) ? arr : null;
 }
 
-type UnitDetail = { address?: unknown; otp?: string | null };
+type UnitDetail = { address?: unknown; otp?: string | null; gst?: GstDetails };
 
 export function parseOrders(
   rawOrders: unknown[],
@@ -170,6 +217,15 @@ export function parseOrders(
     const phone = isObj(orderAddress) ? str(orderAddress.phoneNumber).trim() : "";
     const customer = str(get(order, "accessToOrderDataBag.buyer.name")).trim() || "Unknown customer";
     const orderDate = get(order, "orderMetaData.orderDate");
+    // The GST number lives on the order-detail page; prefer it, fall back to the list entry.
+    let gstin = "";
+    for (const d of Object.values(unitDetails)) {
+      if (d?.gst?.gstin) {
+        gstin = d.gst.gstin;
+        break;
+      }
+    }
+    if (!gstin) gstin = extractGst(order).gstin;
 
     for (const [unitId, u] of real) {
       const heading = str(get(u, "metaData.moRedesignHeading")).trim();
@@ -193,6 +249,7 @@ export function parseOrders(
         status,
         rawStatus: heading,
         activityDateIso: toIso(chosenMs) ?? toIso(orderDate) ?? "",
+        gstin,
       });
     }
   }

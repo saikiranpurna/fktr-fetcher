@@ -4,7 +4,7 @@
 // `credentials: "include"` + host_permissions. Only the custom FKUA header is set.
 import { CONFIG } from "@flk/core/config";
 import { authExpired, upstream } from "@flk/core/errors";
-import { ensureOrdersShape, extractDetail, get } from "@flk/core/parser";
+import { ensureOrdersShape, extractDetail, get, type GstDetails } from "@flk/core/parser";
 
 // Minimal shape we need from a fetch response — `fetch`'s Response satisfies it,
 // and tests can inject a lightweight stub.
@@ -101,7 +101,7 @@ export async function fetchDetail(
   unitId: string,
   shareToken = "",
   fetchFn: FetchLike = fetch,
-): Promise<{ address?: unknown; otp?: string | null }> {
+): Promise<{ address?: unknown; otp?: string | null; gst?: GstDetails }> {
   const fkua = await resolveFkua();
   const requestContext: Record<string, unknown> = {
     type: "CX_ORDER_DETAIL_PAGE",
@@ -140,7 +140,9 @@ export async function fetchDetail(
     const json: unknown = await res.json();
     const detail = extractDetail(json);
     // Only keep a result that carries something useful (mirrors flipkart.py).
-    return detail.address || detail.otp ? { address: detail.address, otp: detail.otp } : {};
+    return detail.address || detail.otp || detail.gst.gstin
+      ? { address: detail.address, otp: detail.otp, gst: detail.gst }
+      : {};
   } catch {
     // best-effort: a single detail failure just leaves that order without an address
     return {};

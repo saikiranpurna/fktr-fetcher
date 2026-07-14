@@ -141,3 +141,26 @@ def delete_account(request: Request, id: str | None = None) -> JSONResponse | di
     accounts = store.remove_account(id) if id else store.clear_all()
     poller.instance.wake()
     return {"accounts": accounts}
+
+
+@app.patch("/api/accounts", response_model=None)
+async def patch_accounts(request: Request) -> JSONResponse | dict:
+    """Activate/deactivate a set of accounts. Body: {ids: string[], active: bool}."""
+    denied = _admin_denied(request)
+    if denied:
+        return denied
+    try:
+        body = await request.json()
+    except Exception:
+        body = None
+    ids = body.get("ids") if isinstance(body, dict) else None
+    active = body.get("active") if isinstance(body, dict) else None
+    if not isinstance(ids, list) or not all(isinstance(i, str) for i in ids) or not ids:
+        b, s = to_error_response(config_error("Request body must include a non-empty 'ids' string array."))
+        return JSONResponse(b, status_code=s)
+    if not isinstance(active, bool):
+        b, s = to_error_response(config_error("Request body must include a boolean 'active'."))
+        return JSONResponse(b, status_code=s)
+    accounts = store.set_active(ids, active)
+    poller.instance.wake()
+    return {"accounts": accounts}

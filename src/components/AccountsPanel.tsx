@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { API_BASE } from "@/lib/api";
 import type { AccountMeta, AccountResult } from "@/lib/types";
 import { TONE_CHIP, TONE_DOT, type Tone } from "@/lib/ui";
@@ -8,7 +8,7 @@ import { TONE_CHIP, TONE_DOT, type Tone } from "@/lib/ui";
 const ADMIN_TOKEN_KEY = "fkrt.adminToken";
 const PAGE = 50; // window the account list so 1000+ accounts don't render at once
 
-type HealthKey = "ok" | "pending" | "queued" | "expired" | "error";
+type HealthKey = "ok" | "pending" | "queued" | "expired" | "error" | "paused";
 type Health = { key: HealthKey; tone: Tone; label: string; rank: number; hint?: string };
 
 // Account health from its last fetch result. rank sorts problems to the top (0 = worst).
@@ -21,11 +21,21 @@ function health(status: AccountResult | undefined): Health {
   return { key: "error", tone: "error", label: "Error", rank: 0, hint: status.error?.message };
 }
 
+// Inactive accounts keep their cookies but are excluded from polling; surface that as its own state.
+const PAUSED_HEALTH: Health = {
+  key: "paused",
+  tone: "neutral",
+  label: "Paused",
+  rank: 2,
+  hint: "Paused — cookies kept, not refreshed.",
+};
+
 const PILLS: { key: HealthKey; tone: Tone; label: string }[] = [
   { key: "expired", tone: "error", label: "Session expired" },
   { key: "error", tone: "error", label: "Error" },
   { key: "pending", tone: "pending", label: "Refreshing" },
   { key: "queued", tone: "neutral", label: "Queued" },
+  { key: "paused", tone: "neutral", label: "Paused" },
   { key: "ok", tone: "ok", label: "Working" },
 ];
 
@@ -100,9 +110,13 @@ export function AccountsPanel({
   const [pasteInvalid, setPasteInvalid] = useState(false);
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
   const [confirmingId, setConfirmingId] = useState<string | null>(null);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [confirmingBulk, setConfirmingBulk] = useState(false);
+  const [busyLabel, setBusyLabel] = useState<string | null>(null);
 
   const inputRef = useRef<HTMLInputElement>(null);
   const confirmRef = useRef<HTMLButtonElement>(null);
+  const bulkConfirmRef = useRef<HTMLButtonElement>(null);
   const listRef = useRef<HTMLUListElement>(null);
   const panelId = useId();
   const tokenId = useId();
@@ -122,25 +136,54 @@ export function AccountsPanel({
     if (confirmingId) confirmRef.current?.focus();
   }, [confirmingId]);
 
+  // Prune selection to accounts that still exist (after removes/reloads) so bulk actions never
+  // target ghosts.
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- prune selection to live accounts
+    setSelected((cur) => {
+      const ids = new Set(accounts.map((a) => a.id));
+      const next = new Set([...cur].filter((id) => ids.has(id)));
+      return next.size === cur.size ? cur : next;
+    });
+  }, [accounts]);
+
+  // Disarm the bulk-remove confirmation whenever the selection or active filter changes, so a
+  // stale "Confirm remove" state can't turn a later single click into an unconfirmed delete.
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- disarm destructive confirm on context change
+    setConfirmingBulk(false);
+  }, [selected, query, statusFilter]);
+
+  // Move focus to the bulk Confirm button when it arms (mirrors the single-row confirm flow).
+  useEffect(() => {
+    if (confirmingBulk) bulkConfirmRef.current?.focus();
+  }, [confirmingBulk]);
+
   const statusById = useMemo(() => new Map(statuses.map((s) => [s.id, s])), [statuses]);
+  const hOf = useCallback(
+    (a: AccountMeta): Health => (a.active ? health(statusById.get(a.id)) : PAUSED_HEALTH),
+    [statusById],
+  );
 
   const summary = useMemo(() => {
-    const c: Record<HealthKey, number> = { ok: 0, pending: 0, queued: 0, expired: 0, error: 0 };
-    for (const a of accounts) c[health(statusById.get(a.id)).key] += 1;
+    const c: Record<HealthKey, number> = { ok: 0, pending: 0, queued: 0, expired: 0, error: 0, paused: 0 };
+    for (const a of accounts) c[hOf(a).key] += 1;
     return c;
-  }, [accounts, statusById]);
+  }, [accounts, hOf]);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
     let list = accounts;
     if (q) list = list.filter((a) => a.label.toLowerCase().includes(q) || a.id.includes(q));
-    if (statusFilter) list = list.filter((a) => health(statusById.get(a.id)).key === statusFilter);
+    if (statusFilter) list = list.filter((a) => hOf(a).key === statusFilter);
     return [...list].sort((a, b) => {
-      const r = health(statusById.get(a.id)).rank - health(statusById.get(b.id)).rank;
+      const r = hOf(a).rank - hOf(b).rank;
       return r !== 0 ? r : a.label.localeCompare(b.label);
     });
-  }, [accounts, query, statusFilter, statusById]);
+  }, [accounts, query, statusFilter, hOf]);
   const shown = filtered.slice(0, limit);
+  const allFilteredIds = filtered.map((a) => a.id);
+  const allSelected = allFilteredIds.length > 0 && allFilteredIds.every((id) => selected.has(id));
 
   function resetWindow() {
     setLimit(PAGE);
@@ -281,6 +324,87 @@ export function AccountsPanel({
     requestAnimationFrame(() => document.getElementById(`fkrt-rm-${id}`)?.focus());
   }
 
+  function toggleSelect(id: string) {
+    setSelected((cur) => {
+      const next = new Set(cur);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+  function toggleSelectAll() {
+    setSelected((cur) => {
+      if (allFilteredIds.every((id) => cur.has(id))) {
+        const next = new Set(cur);
+        for (const id of allFilteredIds) next.delete(id);
+        return next;
+      }
+      return new Set([...cur, ...allFilteredIds]);
+    });
+  }
+
+  async function setActiveAccounts(ids: string[], active: boolean) {
+    if (ids.length === 0) return;
+    setBusy(true);
+    setBusyLabel("Updating…");
+    setErrors([]);
+    setFileMsg(null);
+    persistAdminToken();
+    try {
+      const res = await fetch(`${API_BASE}/api/accounts`, {
+        method: "PATCH",
+        headers: headers(),
+        body: JSON.stringify({ ids, active }),
+      });
+      const body = await res.json().catch(() => null);
+      if (!res.ok) {
+        setErrors([body?.error?.message ?? "Couldn't update those accounts. Try again."]);
+        return;
+      }
+      setFileMsg(`${active ? "Activated" : "Paused"} ${ids.length} account${ids.length === 1 ? "" : "s"}.`);
+      setSelected(new Set());
+      onChanged();
+    } catch (err) {
+      setErrors([(err as Error).message || "Network error while updating accounts."]);
+    } finally {
+      setBusy(false);
+      setBusyLabel(null);
+    }
+  }
+
+  async function removeSelected(ids: string[]) {
+    if (ids.length === 0) return;
+    setBusy(true);
+    setBusyLabel("Removing…");
+    setErrors([]);
+    setFileMsg(null);
+    persistAdminToken();
+    const failures: string[] = [];
+    for (const id of ids) {
+      try {
+        const res = await fetch(`${API_BASE}/api/accounts?id=${encodeURIComponent(id)}`, {
+          method: "DELETE",
+          headers: headers(),
+        });
+        if (!res.ok) {
+          const body = await res.json().catch(() => null);
+          failures.push(body?.error?.message ?? `Couldn't remove ${id}.`);
+        }
+      } catch (err) {
+        failures.push((err as Error).message);
+      }
+    }
+    const removed = ids.length - failures.length;
+    setBusy(false);
+    setBusyLabel(null);
+    requestAnimationFrame(() => listRef.current?.focus());
+    setConfirmingBulk(false);
+    setErrors(failures);
+    if (removed > 0) setFileMsg(`Removed ${removed} account${removed === 1 ? "" : "s"}.`);
+    setSelected(new Set());
+    onChanged();
+  }
+
   function toggleFilter(key: HealthKey) {
     setStatusFilter((cur) => (cur === key ? null : key));
     resetWindow();
@@ -369,6 +493,87 @@ export function AccountsPanel({
         </div>
       )}
 
+      {accounts.length > 0 && (
+        <div className="flex flex-wrap items-center gap-2 px-4 pb-2">
+          <label className="inline-flex items-center gap-1.5 text-xs font-medium text-neutral-700 dark:text-neutral-200">
+            <input
+              type="checkbox"
+              checked={allSelected}
+              ref={(el) => {
+                if (el) el.indeterminate = selected.size > 0 && !allSelected;
+              }}
+              onChange={toggleSelectAll}
+              aria-label={hasFilter ? `Select all ${filtered.length} filtered accounts` : "Select all accounts"}
+              className="h-4 w-4 accent-blue-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+            />
+            {selected.size > 0
+              ? `${selected.size} selected`
+              : hasFilter
+                ? `Select ${filtered.length} filtered`
+                : "Select all"}
+          </label>
+          {selected.size > 0 && (
+            <div className="flex flex-wrap items-center gap-1.5">
+              <button
+                type="button"
+                onClick={() => void setActiveAccounts([...selected], true)}
+                disabled={busy}
+                className="min-h-8 rounded-md border border-black/15 px-2.5 text-xs font-medium text-neutral-700 transition-colors hover:bg-neutral-100 disabled:opacity-60 dark:border-white/15 dark:text-neutral-200 dark:hover:bg-neutral-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+              >
+                Activate
+              </button>
+              <button
+                type="button"
+                onClick={() => void setActiveAccounts([...selected], false)}
+                disabled={busy}
+                className="min-h-8 rounded-md border border-black/15 px-2.5 text-xs font-medium text-neutral-700 transition-colors hover:bg-neutral-100 disabled:opacity-60 dark:border-white/15 dark:text-neutral-200 dark:hover:bg-neutral-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+              >
+                Make inactive
+              </button>
+              {confirmingBulk ? (
+                <>
+                  <button
+                    type="button"
+                    ref={bulkConfirmRef}
+                    onClick={() => void removeSelected([...selected])}
+                    disabled={busy}
+                    className="min-h-8 rounded-md bg-red-600 px-2.5 text-xs font-semibold text-white transition-colors hover:bg-red-700 active:bg-red-800 disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500"
+                  >
+                    Confirm remove {selected.size}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setConfirmingBulk(false)}
+                    className="min-h-8 rounded-md border border-black/15 px-2.5 text-xs font-medium text-neutral-600 transition-colors hover:bg-neutral-100 dark:border-white/15 dark:text-neutral-300 dark:hover:bg-neutral-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+                  >
+                    Cancel
+                  </button>
+                </>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => setConfirmingBulk(true)}
+                  disabled={busy}
+                  className="min-h-8 rounded-md border border-black/15 px-2.5 text-xs font-medium text-red-600 transition-colors hover:bg-red-50 active:bg-red-100 disabled:opacity-60 dark:border-white/15 dark:text-red-400 dark:hover:bg-red-950/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500"
+                >
+                  Remove
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => {
+                  setSelected(new Set());
+                  setConfirmingBulk(false);
+                }}
+                className="min-h-8 rounded-md px-2 text-xs font-medium text-neutral-500 underline-offset-2 hover:underline dark:text-neutral-400 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+              >
+                Clear
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+
       <ul ref={listRef} tabIndex={-1} className="max-h-96 space-y-2 overflow-y-auto px-4 pb-2 focus:outline-none">
         {accounts.length === 0 ? (
           <li className="flex items-start gap-2 rounded-lg border border-dashed border-black/15 p-3 text-sm text-neutral-600 dark:border-white/15 dark:text-neutral-300">
@@ -383,14 +588,26 @@ export function AccountsPanel({
           </li>
         ) : (
           shown.map((a) => {
-            const h = health(statusById.get(a.id));
+            const h = hOf(a);
             const st = statusById.get(a.id);
+            const isSelected = selected.has(a.id);
             return (
               <li
                 key={a.id}
-                className="flex items-center justify-between gap-2 rounded-lg border border-black/5 px-3 py-2 dark:border-white/10"
+                className={`flex items-center gap-2.5 rounded-lg border px-3 py-2 transition-colors ${
+                  isSelected
+                    ? "border-blue-400 bg-blue-50/60 dark:border-blue-500/50 dark:bg-blue-950/30"
+                    : "border-black/5 dark:border-white/10"
+                } ${a.active ? "" : "opacity-60"}`}
               >
-                <div className="min-w-0">
+                <input
+                  type="checkbox"
+                  checked={isSelected}
+                  onChange={() => toggleSelect(a.id)}
+                  aria-label={`Select ${a.label}`}
+                  className="h-4 w-4 shrink-0 accent-blue-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+                />
+                <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-2">
                     <span className="truncate text-sm font-medium text-neutral-900 dark:text-neutral-100">
                       {a.label}
@@ -400,7 +617,7 @@ export function AccountsPanel({
                     >
                       <span className={`h-1.5 w-1.5 rounded-full ${TONE_DOT[h.tone]}`} aria-hidden />
                       {h.label}
-                      {h.hint && (h.key === "queued" || h.key === "pending") && (
+                      {h.hint && (h.key === "queued" || h.key === "pending" || h.key === "paused") && (
                         <span className="sr-only"> — {h.hint}</span>
                       )}
                     </span>
@@ -466,7 +683,7 @@ export function AccountsPanel({
       {/* Feedback lives OUTSIDE the collapsible drawer so remove errors show even when collapsed. */}
       <div className="space-y-2 px-4 pb-3">
         <div aria-live="polite" className="sr-only">
-          {busy ? importingLabel : (fileMsg ?? "")}
+          {busy ? (busyLabel ?? importingLabel) : (fileMsg ?? "")}
         </div>
         {fileMsg && !busy && (
           <p className="flex items-center gap-1.5 text-xs font-medium text-green-700 dark:text-green-400">
@@ -478,7 +695,7 @@ export function AccountsPanel({
             <div className="rounded-lg border border-red-300 bg-red-50 px-3 py-2 text-xs text-red-700 dark:border-red-500/40 dark:bg-red-950/40 dark:text-red-300">
               <p className="flex items-start gap-1.5 font-medium">
                 <IconAlert />
-                <span>{errors.length === 1 ? errors[0] : `${errors.length} items couldn't be added:`}</span>
+                <span>{errors.length === 1 ? errors[0] : `${errors.length} items couldn't be processed:`}</span>
               </p>
               {errors.length > 1 && (
                 <ul className="mt-1 list-disc space-y-0.5 break-words pl-6">
@@ -513,7 +730,7 @@ export function AccountsPanel({
               {busy ? <Spinner /> : <IconUpload />}
             </span>
             <span className="text-sm font-medium text-neutral-800 dark:text-neutral-100">
-              {busy ? importingLabel : "Drop cookie files or click to browse"}
+              {busy ? (busyLabel ?? importingLabel) : "Drop cookie files or click to browse"}
             </span>
             <span id={dropHintId} className="text-xs text-neutral-500 dark:text-neutral-400">
               .json or .txt — one account per file, or one file with several

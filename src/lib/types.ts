@@ -1,4 +1,4 @@
-export type OrderStatus = "OUT_FOR_DELIVERY" | "DELIVERED" | "ARRIVING" | "OTHER";
+export type OrderStatus = "OUT_FOR_DELIVERY" | "DELIVERED" | "ARRIVING" | "CANCELLED" | "OTHER";
 
 export interface Order {
   account: string; // label of the Flipkart account this order came from
@@ -12,6 +12,7 @@ export interface Order {
   status: OrderStatus;
   rawStatus: string; // original status text, kept for debugging/logging
   activityDateIso: string; // ISO ts used for the "today" filter (see semantics)
+  gstin?: string; // order's GST number (from the order-detail "GST details" section); absent otherwise
 }
 
 // What the parser produces before the service tags it with an account.
@@ -21,6 +22,7 @@ export const STATUS_LABELS: Record<OrderStatus, string> = {
   OUT_FOR_DELIVERY: "Out for Delivery",
   DELIVERED: "Delivered",
   ARRIVING: "Arriving",
+  CANCELLED: "Cancelled",
   OTHER: "Other",
 };
 
@@ -62,6 +64,7 @@ export interface AccountMeta {
   label: string;
   updatedAt: string | null;
   count: number; // number of cookies stored for the account
+  active: boolean; // false = paused: cookies kept, but excluded from polling until reactivated
 }
 
 export interface OrdersResponse {

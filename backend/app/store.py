@@ -74,7 +74,13 @@ def _slug(label: str) -> str:
 
 def _meta(accounts: list[dict]) -> list[dict]:
     return [
-        {"id": a["id"], "label": a["label"], "updatedAt": a.get("updatedAt"), "count": len(a.get("items", []))}
+        {
+            "id": a["id"],
+            "label": a["label"],
+            "updatedAt": a.get("updatedAt"),
+            "count": len(a.get("items", [])),
+            "active": a.get("active", True),
+        }
         for a in accounts
     ]
 
@@ -91,7 +97,7 @@ def _unique_id(base: str, taken: set[str]) -> str:
 def _record(label: str, cookie_input: str) -> dict:
     items = normalize_cookie_input(cookie_input)
     label = (label or "").strip() or "account"
-    return {"id": _slug(label), "label": label, "items": items, "updatedAt": _now_iso()}
+    return {"id": _slug(label), "label": label, "items": items, "updatedAt": _now_iso(), "active": True}
 
 
 def add_account(label: str, cookie_input: str) -> list[dict]:
@@ -186,6 +192,21 @@ def remove_account(account_id: str) -> list[dict]:
     return _meta(backend.load_all())
 
 
+def set_active(account_ids: list[str], active: bool) -> list[dict]:
+    """Activate/deactivate accounts by id. Inactive accounts keep their cookies but are excluded
+    from get_active_accounts(), so the poller drops them from its roster until reactivated."""
+    backend = storage.get_backend()
+    ids = set(account_ids)
+    changed = []
+    for a in backend.load_all():
+        if a.get("id") in ids and a.get("active", True) != active:
+            a["active"] = active
+            changed.append(a)
+    if changed:
+        backend.save_many(changed)
+    return _meta(backend.load_all())
+
+
 def clear_all() -> list[dict]:
     storage.get_backend().clear()
     return []
@@ -205,6 +226,6 @@ def get_active_accounts() -> list[dict]:
     out = []
     for a in storage.get_backend().load_all():
         cookies = to_cookie_dict(a.get("items", []))
-        if cookies:
+        if cookies and a.get("active", True):
             out.append({"id": a["id"], "label": a["label"], "cookies": cookies})
     return out

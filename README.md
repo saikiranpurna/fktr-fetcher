@@ -80,12 +80,13 @@ storage, bundled in Docker). To add more accounts, drop more files; to remove on
 
 - **Refresh** re-fetches; **Auto-refresh (60s)** keeps it current.
 - **Filters:**
-  - Status pills: **Out for Delivery / Arriving / Delivered / Other** (click to toggle).
+  - Status pills: **Out for Delivery / Arriving / Delivered / Cancelled / Other** (click to toggle).
   - **Date:** All / Today / Tomorrow / Next 7 days / Last 7 days.
   - **Search:** matches order ID, tracking ID (FMPP…), mobile number, item, or customer.
 - **Download CSV** exports exactly what's currently shown (respects your filters). Columns:
   `Account, Order ID, Tracking ID, Customer Name, Item, Delivery Address, Mobile, OTP, Status,
-  Activity Date`. It opens cleanly in Excel (UTF‑8 BOM).
+  Activity Date, GSTIN`. The GSTIN column is filled from the order's "GST details" section for
+  orders that carry a GST number, and blank otherwise. Opens cleanly in Excel (UTF‑8 BOM).
 
 **Note on speed:** a full refresh takes **~40–70 seconds** because it pulls your entire order
 history plus per-shipment details (address, OTP, mobile) — with no browser, over plain HTTP.
