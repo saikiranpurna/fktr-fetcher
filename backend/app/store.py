@@ -67,6 +67,12 @@ def to_cookie_dict(items: list[dict]) -> dict[str, str]:
     return {i["name"]: str(i.get("value", "")) for i in items if i.get("name")}
 
 
+def _cookie_sig(items: list[dict]) -> tuple:
+    """Canonical identity of an account's cookies (its name=value set), so the same session added
+    twice under different labels is recognized as one account and deduped."""
+    return tuple(sorted(to_cookie_dict(items).items()))
+
+
 def _slug(label: str) -> str:
     s = re.sub(r"[^a-z0-9]+", "-", (label or "").lower()).strip("-")
     return s or "account"
@@ -101,9 +107,16 @@ def _record(label: str, cookie_input: str) -> dict:
 
 
 def add_account(label: str, cookie_input: str) -> list[dict]:
-    """Add/replace a single account (same label upserts). Returns account metadata."""
+    """Add/replace a single account. Same label upserts (re-dropping refreshes it); the SAME
+    cookies added under a DIFFERENT label are a duplicate — the original is kept and the add is a
+    no-op, so a mistaken re-add can't create a second copy of one account."""
     backend = storage.get_backend()
-    backend.save_many([_record(label, cookie_input)])
+    rec = _record(label, cookie_input)
+    existing = backend.load_all()
+    sig = _cookie_sig(rec["items"])
+    if any(a.get("id") != rec["id"] and _cookie_sig(a.get("items", [])) == sig for a in existing):
+        return _meta(existing)
+    backend.save_many([rec])
     return _meta(backend.load_all())
 
 
@@ -170,17 +183,26 @@ def import_accounts(default_label: str, content: str) -> tuple[int, list[dict]]:
 
     Same-label entries across separate imports upsert (re-dropping a file updates it); genuine
     duplicate labels *within one blob* are suffixed (-2, -3, …) so none is silently overwritten.
+    Accounts whose cookies are identical to one already stored (or to an earlier entry in the same
+    blob) under a different label are duplicates and are skipped — only the first copy is kept.
     """
     entries = parse_import(content, default_label)
     backend = storage.get_backend()
-    taken = {a["id"] for a in backend.load_all() if a.get("id")}
+    existing = backend.load_all()
+    taken = {a["id"] for a in existing if a.get("id")}
+    sigs: dict[tuple, str] = {_cookie_sig(a.get("items", [])): a["id"] for a in existing}
     records: list[dict] = []
     batch_ids: set[str] = set()
     for entry in entries:
         rec = _record(entry["label"], entry["cookie"])
+        sig = _cookie_sig(rec["items"])
+        dup_id = sigs.get(sig)
+        if dup_id is not None and dup_id != rec["id"]:
+            continue  # same cookies already held under another account — skip the duplicate
         if rec["id"] in batch_ids:
             rec["id"] = _unique_id(rec["id"], batch_ids | taken)
         batch_ids.add(rec["id"])
+        sigs[sig] = rec["id"]
         records.append(rec)
     backend.save_many(records)
     return len(records), _meta(backend.load_all())

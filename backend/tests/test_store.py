@@ -145,3 +145,37 @@ def test_set_active_targets_only_named_ids(file_store):
     store.set_active(["mom"], False)
     by_id = {m["id"]: m["active"] for m in store.list_accounts()}
     assert by_id == {"mom": False, "dad": True}
+
+
+# ── dedup: the same account (identical cookies) is stored once ────────────────
+
+
+def test_add_account_same_cookies_different_label_is_deduped(file_store):
+    store.add_account("mom", "SN=1; T=abc")
+    store.add_account("mom-again", "SN=1; T=abc")  # same cookies, different label
+    accts = store.list_accounts()
+    assert len(accts) == 1 and accts[0]["id"] == "mom"
+
+
+def test_add_account_same_label_still_upserts_cookies(file_store):
+    store.add_account("mom", "SN=1")
+    store.add_account("mom", "SN=2")  # refresh: same label, new cookies
+    assert len(store.list_accounts()) == 1
+    assert store.get_active_accounts()[0]["cookies"] == {"SN": "2"}
+
+
+def test_import_skips_duplicate_cookies_within_one_blob(file_store):
+    n, meta = store.import_accounts("file", '[{"label":"a","cookie":"SN=1"},{"label":"b","cookie":"SN=1"}]')
+    assert n == 1 and len(meta) == 1
+
+
+def test_import_skips_accounts_already_stored(file_store):
+    store.add_account("mom", "SN=1")
+    n, meta = store.import_accounts("file", '[{"label":"dad","cookie":"SN=1"}]')  # dupe of mom
+    assert n == 0
+    assert len(meta) == 1 and meta[0]["id"] == "mom"
+
+
+def test_import_keeps_genuinely_distinct_accounts(file_store):
+    n, meta = store.import_accounts("file", '[{"label":"a","cookie":"SN=1"},{"label":"b","cookie":"SN=2"}]')
+    assert n == 2 and len(meta) == 2

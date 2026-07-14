@@ -55,4 +55,24 @@ describe("ordersToCsv", () => {
     const row = ordersToCsv([order({})]).slice(1).split("\r\n")[1];
     expect(row.endsWith(",")).toBe(true); // trailing empty GSTIN cell
   });
+
+  it("drops duplicate rows sharing a tracking id, keeping the first", () => {
+    const csv = ordersToCsv([
+      order({ trackingId: "FMPP1", itemName: "First" }),
+      order({ trackingId: "FMPP1", itemName: "Dup" }),
+      order({ trackingId: "FMPP2", itemName: "Other" }),
+    ]);
+    const rows = csv.slice(1).split("\r\n").slice(1); // drop header
+    expect(rows).toHaveLength(2);
+    expect(csv).toContain("First");
+    expect(csv).not.toContain("Dup");
+  });
+
+  it("keeps every row that has no tracking id (not dedupable)", () => {
+    const rows = ordersToCsv([order({ trackingId: "" }), order({ trackingId: "" })])
+      .slice(1)
+      .split("\r\n")
+      .slice(1);
+    expect(rows).toHaveLength(2);
+  });
 });

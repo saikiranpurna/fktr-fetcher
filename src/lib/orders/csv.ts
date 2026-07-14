@@ -22,7 +22,15 @@ function csvCell(value: string): string {
 
 export function ordersToCsv(orders: Order[]): string {
   const lines = [HEADERS.map(csvCell).join(",")];
+  // One row per shipment: drop repeats of the same tracking id (FMP…) — e.g. when the same
+  // account was added twice. Rows without a tracking id yet aren't dedupable, so keep them all.
+  const seenTracking = new Set<string>();
   for (const o of orders) {
+    const tid = o.trackingId.trim();
+    if (tid) {
+      if (seenTracking.has(tid)) continue;
+      seenTracking.add(tid);
+    }
     lines.push(
       [
         o.account,
