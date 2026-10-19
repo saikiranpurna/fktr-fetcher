@@ -1,0 +1,145 @@
+{
+  "__NOTE__": "Synthetic, PII-free. Unit shapes (moneyDataBag, nonReturnRefundDataBag, reverseLegDataBag) copied from live /api/5/self-serve/orders captures (2026-10-19); every value is fabricated.",
+  "orders": [
+    {
+      "orderMetaData": {"orderId": "OD900000000000000001", "orderDate": 1792000000000},
+      "orderMoneyDataBag": {"amount": 16971.0},
+      "accessToOrderDataBag": {"buyer": {"name": "Test Buyer"}, "endUser": {"id": "share-1"}},
+      "productDataBag": {
+        "LST001": {"productBasicData": {"title": "Steel Bottle"}},
+        "LST002": {"productBasicData": {"title": "Desk Lamp"}}
+      },
+      "units": {
+        "U1001": {
+          "metaData": {"moRedesignHeading": "Delivered on Oct 15", "trackingId": "FMPP1000000001", "listingId": "LST001"},
+          "deliveryDataBag": {"promiseDataBag": {"promisedDate": 1792100000000, "actualDeliveredDate": 1792090000000}},
+          "moneyDataBag": {"amount": 1425.0, "paymentMethods": [{"amounts": [{"currency": "INR", "value": 1425.0}]}]},
+          "nonReturnRefundDataBag": {"nonReturnRefunds": [], "version": 1},
+          "reverseLegDataBag": {"returnBadge": null, "returnTracking": [], "version": 2}
+        },
+        "U1002": {
+          "metaData": {"moRedesignHeading": "Replacement Completed", "trackingId": "FMPP1000000002", "listingId": "LST002"},
+          "deliveryDataBag": {"promiseDataBag": {"promisedDate": 1792100000000, "actualDeliveredDate": 0}},
+          "moneyDataBag": {"amount": 7773.0, "paymentMethods": [{"amounts": [{"currency": "INR", "value": 7773.0}]}]},
+          "nonReturnRefundDataBag": {"nonReturnRefunds": [], "version": 1},
+          "reverseLegDataBag": {
+            "returnBadge": null,
+            "returnTracking": [{
+              "associatedUnitId": "U2002",
+              "remarks": [{"amountValue": null, "remark": "We have resent this product."}],
+              "returnIdString": "RET000000001",
+              "returnStatus": "Completed",
+              "returnType": "Replacement",
+              "title": "Replacement Completed"
+            }],
+            "version": 2
+          }
+        },
+        "U2002": {
+          "metaData": {"moRedesignHeading": "Refund Completed", "trackingId": "FMPP2000000002", "listingId": "LST002"},
+          "deliveryDataBag": {"promiseDataBag": {"promisedDate": 1792250000000, "actualDeliveredDate": 0}},
+          "moneyDataBag": {"amount": 7773.0, "paymentMethods": [{"amounts": [{"currency": "INR", "value": 7773.0}]}]},
+          "nonReturnRefundDataBag": {"nonReturnRefunds": [{
+            "createdDate": 1792300500000,
+            "orderItemUnitId": "U2002",
+            "quantity": 1,
+            "refundAmount": 7773.0,
+            "refundInitiationDate": 1792300500000,
+            "refundPromiseDate": "2026-10-23T23:57:00",
+            "refundStatus": "Processed"
+          }], "version": 1},
+          "reverseLegDataBag": {"returnBadge": "REPLACEMENT", "returnTracking": [], "version": 2}
+        },
+        "U1003": {
+          "metaData": {"moRedesignHeading": "Cancelled on Oct 14", "trackingId": ""},
+          "vasItemDetails": {"type": "TRUST_SHIELD"},
+          "moneyDataBag": {"amount": 0.0, "paymentMethods": [{"amounts": [{"currency": "INR", "value": 0.0}]}]}
+        }
+      }
+    },
+    {
+      "orderMetaData": {"orderId": "OD900000000000000002", "orderDate": 1791000000000},
+      "orderMoneyDataBag": {"amount": 5000.0},
+      "units": {
+        "U3001": {
+          "metaData": {"moRedesignHeading": "Refund completed", "trackingId": "FMPP3000000001"},
+          "deliveryDataBag": {"promiseDataBag": {"promisedDate": 1791100000000, "actualDeliveredDate": 0}},
+          "moneyDataBag": {"amount": 5000.0, "paymentMethods": [{"amounts": [{"currency": "INR", "value": 5000.0}]}]},
+          "nonReturnRefundDataBag": {"nonReturnRefunds": [
+            {"refundAmount": 100.0, "refundStatus": "Completed", "refundInitiationDate": 1791200000000, "refundPromiseDate": "2026-10-10T10:00:00", "orderItemUnitId": "U3001"},
+            {"refundAmount": 4900.0, "refundStatus": "Completed", "refundInitiationDate": 1791210000000, "refundPromiseDate": "2026-10-12T18:30:00", "orderItemUnitId": "U3001"}
+          ], "version": 1},
+          "reverseLegDataBag": {"returnBadge": null, "returnTracking": [], "version": 2}
+        }
+      }
+    },
+    {
+      "orderMetaData": {"orderId": "OD900000000000000003", "orderDate": 1791500000000},
+      "orderMoneyDataBag": {"amount": 0.0},
+      "units": {
+        "U4001": {
+          "metaData": {"moRedesignHeading": "Order Not Placed", "trackingId": ""},
+          "moneyDataBag": {"amount": 999.0}
+        }
+      }
+    },
+    {
+      "orderMetaData": {"orderId": "OD900000000000000004", "orderDate": 1791600000000},
+      "orderMoneyDataBag": {"amount": 276.0},
+      "units": {
+        "U5001": {
+          "metaData": {"moRedesignHeading": "Delivered on Oct 02", "trackingId": "FMPP5000000001"},
+          "moneyDataBag": {"amount": 132.0, "paymentMethods": [{"amounts": [{"currency": "INR", "value": 138.0}]}]}
+        },
+        "U5002": {
+          "metaData": {"moRedesignHeading": "Delivered on Oct 02", "trackingId": "FMPP5000000002"},
+          "moneyDataBag": {"amount": 132.0, "paymentMethods": [{"amounts": [{"currency": "INR", "value": 138.0}]}]}
+        }
+      }
+    },
+    {
+      "orderMetaData": {"orderId": "OD900000000000000005", "orderDate": 1792500000000},
+      "orderMoneyDataBag": {"amount": 500.0},
+      "units": {
+        "U6001": {
+          "metaData": {"moRedesignHeading": "Delivery attempted", "trackingId": "FMPP6000000001"},
+          "deliveryDataBag": {"promiseDataBag": {"promisedDate": 1792600000000}},
+          "moneyDataBag": {"amount": 500.0, "paymentMethods": [{"amounts": [{"currency": "INR", "value": 500.0}]}]}
+        }
+      }
+    },
+    {
+      "orderMetaData": {"orderId": "OD900000000000000006", "orderDate": 1790000000000},
+      "orderMoneyDataBag": {"amount": 335.0},
+      "units": {
+        "U7001": {
+          "metaData": {"moRedesignHeading": "Exchange Completed", "trackingId": "FMPP7000000001"},
+          "moneyDataBag": {"amount": 335.0, "paymentMethods": [{"amounts": [{"currency": "INR", "value": 335.0}]}]},
+          "reverseLegDataBag": {"returnBadge": null, "returnTracking": [{
+            "associatedUnitId": "U8001", "remarks": [], "returnStatus": "Completed", "returnType": "Exchange", "title": "Exchange Completed"
+          }], "version": 2}
+        },
+        "U8001": {
+          "metaData": {"moRedesignHeading": "Delivered on Dec 03, 2025", "trackingId": "FMPP8000000001"},
+          "deliveryDataBag": {"promiseDataBag": {"promisedDate": 1790300000000, "actualDeliveredDate": 1790400000000}},
+          "moneyDataBag": {"amount": 335.0, "paymentMethods": [{"amounts": [{"currency": "INR", "value": 0.0}]}]},
+          "reverseLegDataBag": {"returnBadge": "EXCHANGE", "returnTracking": [], "version": 2}
+        }
+      }
+    },
+    {
+      "orderMetaData": {"orderId": "OD900000000000000007", "orderDate": 1790500000000},
+      "orderMoneyDataBag": {"amount": 154.0},
+      "units": {
+        "U9001": {
+          "metaData": {"moRedesignHeading": "Refund Completed", "trackingId": "FMPP9000000001"},
+          "moneyDataBag": {"amount": 154.0, "paymentMethods": [{"amounts": [{"currency": "INR", "value": 154.0}]}]},
+          "reverseLegDataBag": {"returnBadge": null, "returnTracking": [{
+            "remarks": [{"amountValue": {"currency": "INR", "inrValue": 154.0, "value": 154.0}, "remark": "Refund for returned item"}],
+            "returnStatus": "Completed", "returnType": "Refund", "title": "Refund Completed"
+          }], "version": 2}
+        }
+      }
+    }
+  ]
+}

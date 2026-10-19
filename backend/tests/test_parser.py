@@ -72,3 +72,141 @@ def test_parse_orders_carries_gst_from_detail_page():
 
 def test_extract_gst_finds_gstin_inside_an_array():
     assert parser.extract_gst({"gstDetails": ["36ABFFK3014J1ZH"]})["gstin"] == "36ABFFK3014J1ZH"
+
+
+# ── price / lifecycle fields (synthetic fixtures shaped like live 2026-10-19 captures) ─
+
+import json  # noqa: E402
+from datetime import datetime, timedelta, timezone  # noqa: E402
+from pathlib import Path  # noqa: E402
+
+_FIX = Path(__file__).parent / "fixtures"
+_ORDERS = json.loads((_FIX / "lifecycle-orders.json").read_text(encoding="utf-8"))["orders"]
+_DETAIL = json.loads((_FIX / "lifecycle-detail.json").read_text(encoding="utf-8"))
+_IST = timezone(timedelta(hours=5, minutes=30))
+
+
+def _iso(ms: int) -> str:
+    return datetime.fromtimestamp(ms / 1000, tz=timezone.utc).isoformat()
+
+
+def _rows(details=None, timelines=None, state=None) -> dict[str, dict]:
+    rows = parser.parse_orders(_ORDERS, details or {}, timelines, state)
+    return {r["trackingId"] or r["orderId"]: r for r in rows}
+
+
+def _detailed_rows() -> dict[str, dict]:
+    d = parser.extract_detail(_DETAIL)
+    oid = "OD900000000000000001"
+    details = {oid: {"U1002": {"address": d["address"], "otp": None, "gst": d["gst"]}}}
+    state = {oid: {u: "ok" for u in ("U1001", "U1002", "U2002", "U1003")}}
+    return _rows(details, {oid: d["timelines"]}, state)
+
+
+def test_map_status_delivery_attempted_is_out_for_delivery():
+    # Live: "Delivery attempted" = OUT_FOR_DELIVERY done + UNDEL current -> still an active delivery.
+    assert parser.map_status("Delivery attempted") == "OUT_FOR_DELIVERY"
+    assert _rows()["FMPP6000000001"]["status"] == "OUT_FOR_DELIVERY"
+
+
+def test_extract_detail_reads_every_units_timeline_and_ignores_unfinished_steps():
+    d = parser.extract_detail(_DETAIL)
+    assert set(d["timelines"]) == {"U1001", "U1002", "U2002", "U1003"}
+    assert d["timelines"]["U1002"]["cancelled"].isoformat() == _iso(1792150000000)
+    assert d["timelines"]["U2002"]["created"].isoformat() == _iso(1792150001000)
+    assert "delivered" not in d["timelines"]["U2002"]  # the DELIVERY step is INACTIVE, not DONE
+    assert d["otp"] == "4821" and d["address"]["pinCode"] == "560001"
+
+
+def test_price_paid_uses_whichever_field_reconciles_with_the_order_total():
+    rows = _rows()
+    assert rows["FMPP1000000001"]["pricePaid"] == 1425.0  # moneyDataBag.amount reconciles
+    assert rows["FMPP5000000001"]["pricePaid"] == 138.0  # fees added after pricing: charged amount
+    assert rows["OD900000000000000003"]["pricePaid"] == 0.0  # "Order Not Placed": nothing charged
+    assert rows["FMPP8000000001"]["pricePaid"] == 0.0  # exchange unit was free...
+    assert rows["FMPP7000000001"]["pricePaid"] == 335.0  # ...the original was paid
+
+
+def test_expected_and_delivered_dates_come_from_the_promise_data():
+    row = _rows()["FMPP1000000001"]
+    assert row["expectedDateIso"] == _iso(1792100000000)
+    assert row["deliveredDateIso"] == _iso(1792090000000)
+    assert row["activityDateIso"] == _iso(1792090000000)  # no lifecycle event: delivered date
+
+
+def test_cancellation_refunds_sum_and_report_latest_completed_date():
+    row = _rows()["FMPP3000000001"]
+    assert row["refundAmount"] == 5000.0  # 100 + 4900 partial refunds
+    assert row["refundStatus"] == "completed"
+    latest = datetime(2026, 10, 12, 18, 30, tzinfo=_IST)  # naive refundPromiseDate is IST
+    assert row["refundDateIso"] == latest.isoformat()
+    assert row["activityDateIso"] == latest.isoformat()
+
+
+def test_processed_refund_is_initiated_and_dated_by_initiation():
+    row = _rows()["FMPP2000000002"]
+    assert (row["refundAmount"], row["refundStatus"]) == (7773.0, "initiated")
+    assert row["refundDateIso"] == _iso(1792300500000)
+
+
+def test_return_refund_amount_comes_from_the_return_remarks():
+    row = _rows()["FMPP9000000001"]
+    assert (row["refundAmount"], row["refundStatus"], row["refundDateIso"]) == (154.0, "completed", None)
+
+
+def test_no_lifecycle_data_gives_empty_fields_not_errors():
+    row = _rows()["FMPP1000000001"]
+    assert row["refundAmount"] is None and row["refundStatus"] == "" and row["refundDateIso"] is None
+    assert row["cancelledDateIso"] is None and row["replacementOf"] == ""
+    assert row["detailStatus"] == "skipped"  # nothing was fetched for it in this call
+
+
+def test_replacement_links_resent_unit_and_dates_the_original_row():
+    rows = _detailed_rows()
+    original, resent = rows["FMPP1000000002"], rows["FMPP2000000002"]
+    assert resent["replacementOf"] == "FMPP1000000002"
+    assert original["replacementOf"] == ""
+    assert original["cancelledDateIso"] == _iso(1792150000000)
+    assert original["replacementDateIso"] == _iso(1792150001000)  # resent unit's ORDER_RECEIVED
+    assert original["replacementCancelledDateIso"] == _iso(1792300000000)  # resent unit's CANCEL
+    assert original["replacementDeliveredDateIso"] is None
+    # Latest lifecycle event drives the activity date (the replacement's cancellation).
+    assert original["activityDateIso"] == _iso(1792300000000)
+    assert resent["activityDateIso"] == _iso(1792300500000)  # its refund initiation is latest
+    assert original["detailStatus"] == "ok" and original["deliveryAddress"].startswith("1 Test Street")
+
+
+def test_exchange_counts_as_replacement_and_uses_resent_delivery_date():
+    rows = _rows()
+    assert rows["FMPP8000000001"]["replacementOf"] == "FMPP7000000001"
+    assert rows["FMPP7000000001"]["replacementDeliveredDateIso"] == _iso(1790400000000)
+
+
+def test_latest_replacement_wins_when_a_unit_was_replaced_twice():
+    order = json.loads(json.dumps(_ORDERS[0]))
+    units = order["units"]
+    units["U3003"] = json.loads(json.dumps(units["U2002"]))
+    units["U3003"]["metaData"]["trackingId"] = "FMPP3000000003"
+    units["U1002"]["reverseLegDataBag"]["returnTracking"].append(
+        {"associatedUnitId": "U3003", "returnType": "Replacement", "returnStatus": "Completed"}
+    )
+    created = datetime.fromtimestamp(1792400000, tz=timezone.utc)
+    timelines = {order["orderMetaData"]["orderId"]: {"U2002": {"created": datetime.fromtimestamp(1792150001, tz=timezone.utc)},
+                                                     "U3003": {"created": created}}}
+    rows = {r["trackingId"]: r for r in parser.parse_orders([order], {}, timelines)}
+    assert rows["FMPP1000000002"]["replacementDateIso"] == created.isoformat()
+    assert rows["FMPP3000000003"]["replacementOf"] == "FMPP1000000002"
+
+
+def test_is_lifecycle_unit_flags_cancel_refund_and_replacement_units():
+    units = _ORDERS[0]["units"]
+    assert parser.is_lifecycle_unit(units["U1002"])  # returnTracking
+    assert parser.is_lifecycle_unit(units["U2002"])  # refunds + returnBadge
+    assert not parser.is_lifecycle_unit(units["U1001"])  # plain delivered unit
+    assert parser.is_lifecycle_unit({"metaData": {"moRedesignHeading": "Cancelled on Oct 17"}})
+
+
+def test_failed_return_pickup_is_not_an_active_delivery():
+    assert parser.map_status("Return pickup attempted") != "OUT_FOR_DELIVERY"
+    assert parser.map_status("Pickup unsuccessful") != "OUT_FOR_DELIVERY"
+    assert parser.map_status("Delivery unsuccessful") == "OUT_FOR_DELIVERY"

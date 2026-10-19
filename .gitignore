@@ -51,3 +51,7 @@ backend/.venv/
 backend/.env.local
 *.json.tmp
 .superpowers
+
+# secrets: exported Flipkart session cookies + raw captured API responses (customer PII)
+docs/cookies/
+backend/.samples/

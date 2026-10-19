@@ -41,7 +41,12 @@ class AccountCache:
     error: dict | None = None
     count: int = 0
     fetched_at: str | None = None  # ISO of last completed fetch
-    fetched_monotonic: float | None = None  # scheduling clock; None = never fetched
+    fetched_monotonic: float | None = None  # scheduling clock; None = due on the next tick
+    # Quality of the orders being served, from the last successful fetch (kept on failure, like
+    # the orders): history truncated (a later page failed / deadline / page cap), and how many
+    # per-shipment detail calls failed.
+    partial: bool = False
+    detail_failed: int = 0
 
 
 class Poller:
@@ -125,12 +130,18 @@ class Poller:
             for a in accounts:
                 aid = a["id"]
                 seen.add(aid)
+                prev = self._roster.get(aid)
                 self._roster[aid] = {"label": a["label"], "cookies": a["cookies"]}
                 cached = self._cache.get(aid)
                 if cached is None:
                     self._cache[aid] = AccountCache(id=aid, label=a["label"])
                 else:
                     cached.label = a["label"]
+                    if prev is not None and prev["cookies"] != a["cookies"]:
+                        # A re-dropped (fresh) cookie: fetch on the next tick rather than after the
+                        # refresh interval, so "Session expired" clears now, not up to 30 min later.
+                        # The last orders stay on the board until that fetch lands.
+                        cached.fetched_monotonic = None
             for gone in [aid for aid in self._roster if aid not in seen]:
                 self._roster.pop(gone, None)
                 self._cache.pop(gone, None)
@@ -166,11 +177,14 @@ class Poller:
             label = entry["label"] if entry else aid
             cookies = entry["cookies"] if entry else None
         ok, error, orders = False, None, None
+        partial, detail_failed = False, 0
         if not cookies:
             error = {"code": "CONFIG_ERROR", "message": "No cookies stored for this account."}
         else:
             try:
-                orders = service.fetch_account_orders(label, cookies)
+                orders, meta = service.fetch_account_orders(label, cookies)
+                partial = bool(meta.get("partial", False))
+                detail_failed = int(meta.get("detailFailed", 0) or 0)
                 ok = True
             except AppError as e:
                 error = {"code": e.code, "message": e.message}
@@ -181,13 +195,19 @@ class Poller:
             if ac is not None:
                 ac.label = label
                 ac.pending = False
-                ac.fetched_monotonic = time.monotonic()
+                current = self._roster.get(aid)
+                # The cookie was re-dropped while this fetch ran with the old one: stay due so the
+                # new cookie is tried on the next tick instead of after a full refresh interval.
+                stale = current is not None and current["cookies"] != cookies
+                ac.fetched_monotonic = None if stale else time.monotonic()
                 ac.fetched_at = _now_iso()
                 if ok and orders is not None:
                     ac.orders = orders
                     ac.count = len(orders)
                     ac.ok = True
                     ac.error = None
+                    ac.partial = partial
+                    ac.detail_failed = detail_failed
                 else:
                     # Keep the last good orders (a transient failure shouldn't blank the board).
                     ac.ok = False
@@ -234,6 +254,10 @@ class Poller:
                 res: dict = {"id": ac.id, "label": ac.label, "ok": ac.ok, "count": ac.count}
                 if ac.pending:
                     res["pending"] = True
+                else:
+                    # Describes the orders served for this account (the last good fetch's).
+                    res["partial"] = ac.partial
+                    res["detailFailed"] = ac.detail_failed
                 if ac.fetched_at:
                     res["fetchedAt"] = ac.fetched_at
                 if ac.error and not ac.ok:

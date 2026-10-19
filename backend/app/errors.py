@@ -5,6 +5,9 @@ from __future__ import annotations
 # ErrorCode -> HTTP status. Kept identical to the frontend's expectations.
 CODE_STATUS: dict[str, int] = {
     "AUTH_EXPIRED": 401,   # cookie invalid/expired
+    # Missing/wrong x-admin-token: our own API's credential, not the Flipkart session, so the UI
+    # must not tell the user to replace a cookie.
+    "UNAUTHORIZED": 401,
     "UPSTREAM_ERROR": 502,  # network/timeout/5xx/other 4xx
     "PARSE_ERROR": 502,     # response shape unexpected
     "CONFIG_ERROR": 400,    # missing account or endpoint
@@ -25,6 +28,10 @@ class AppError(Exception):
 
 def auth_expired() -> AppError:
     return AppError("AUTH_EXPIRED", "Flipkart session expired or invalid. Update the cookie in the Accounts panel.")
+
+
+def unauthorized(message: str) -> AppError:
+    return AppError("UNAUTHORIZED", message)
 
 
 def config_error(message: str) -> AppError:

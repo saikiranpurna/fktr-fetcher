@@ -1,0 +1,4 @@
+-r requirements.txt
+pytest>=8
+# FastAPI's TestClient is built on httpx (used by tests/test_main.py).
+httpx>=0.27

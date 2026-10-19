@@ -2,19 +2,27 @@
 # Build/run:  docker compose up --build
 # Then open   http://localhost:3100   and drop each account's cookie .json/.txt in the Accounts panel.
 # MinIO console (optional): http://localhost:9001  (user/pass from MINIO_ROOT_USER/PASSWORD).
+#
+# LOCAL USE ONLY: this stack runs on one machine and is never deployed to a server. The API serves
+# customer PII and live delivery OTPs and MinIO holds Flipkart session cookies, so every published
+# port binds to 127.0.0.1 (unreachable from the LAN) and MinIO's S3 port is not published at all:
+# the backend reaches it over the compose network. Don't widen these bindings.
 
 services:
   minio:
-    image: minio/minio:RELEASE.2025-09-07T16-13-09Z
+    # MinIO stopped publishing community images (docker.io/minio/minio and quay.io/minio/minio
+    # now deny pulls), so use Chainguard's from-source build. Its free tier only ships :latest,
+    # so pin the digest for reproducible builds.
+    image: cgr.dev/chainguard/minio:latest@sha256:709099319add48dfb44aa596a7070d3ddd8dd04d7ae881765719aec29df9e510
     command: server /data --console-address ":9001"
     environment:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
     volumes:
       - minio:/data
+    # S3 API (9000) stays internal: only the backend uses it, as http://minio:9000.
     ports:
-      - "9000:9000"   # S3 API
-      - "9001:9001"   # web console (http://localhost:9001)
+      - "127.0.0.1:9001:9001"   # web console (http://localhost:9001)
     healthcheck:
       test: ["CMD", "mc", "ready", "local"]
       interval: 5s
@@ -36,8 +44,15 @@ services:
       APP_TIMEZONE: ${APP_TIMEZONE:-Asia/Kolkata}
       FLIPKART_MAX_PAGES: ${FLIPKART_MAX_PAGES:-100}
       FLIPKART_MAX_DETAILS: ${FLIPKART_MAX_DETAILS:-40}
+      # Lifecycle (cancel / replacement / refund) detail lookups: orders from the last N days,
+      # at most this many detail calls per account.
+      FLIPKART_HISTORY_DAYS: ${FLIPKART_HISTORY_DAYS:-30}
+      FLIPKART_MAX_HISTORY_DETAILS: ${FLIPKART_MAX_HISTORY_DETAILS:-150}
       FLIPKART_TIMEOUT_MS: ${FLIPKART_TIMEOUT_MS:-20000}
       ADMIN_TOKEN: ${ADMIN_TOKEN:-}
+      # Browser origins allowed to call the API (comma-separated). Blank = the local UI
+      # (http://localhost:3100, http://127.0.0.1:3100, and :3000 for `npm run dev`).
+      CORS_ORIGINS: ${CORS_ORIGINS:-}
       # Background poller: refresh each account every REFRESH_INTERVAL_S (default 30 min), fetching
       # at most FETCH_CONCURRENCY accounts at once. Raise concurrency to tighten the cadence at
       # 1000+ accounts (watch Flipkart rate limits).
@@ -46,7 +61,8 @@ services:
     volumes:
       - session:/data
     ports:
-      - "8000:8000"   # exposed for debugging / direct API access
+      # The browser calls the API directly (NEXT_PUBLIC_BACKEND_URL below); loopback only.
+      - "127.0.0.1:8000:8000"
     depends_on:
       minio:
         condition: service_healthy
@@ -62,7 +78,7 @@ services:
     environment:
       BACKEND_URL: http://backend:8000
     ports:
-      - "3100:3000"
+      - "127.0.0.1:3100:3000"
     depends_on:
       - backend
     restart: unless-stopped

@@ -19,6 +19,7 @@ import type {
   OrderStatus,
   OrdersResponse,
 } from "@/lib/types";
+import { errorText } from "@/lib/ui";
 import { AccountsPanel } from "./AccountsPanel";
 import { ErrorNotice } from "./ErrorNotice";
 import { OrderFilters } from "./OrderFilters";
@@ -27,15 +28,6 @@ import { RefreshBar } from "./RefreshBar";
 
 const POLL_MS = 60_000;
 const DEFAULT_TZ = "Asia/Kolkata";
-
-// Operator-facing text for internal error codes (no raw enums in the UI).
-const ERROR_TEXT: Record<ErrorCode, string> = {
-  AUTH_EXPIRED: "session expired",
-  UPSTREAM_ERROR: "couldn't reach Flipkart",
-  PARSE_ERROR: "unexpected response",
-  CONFIG_ERROR: "not configured",
-  UNKNOWN: "unknown error",
-};
 
 export function Dashboard() {
   const [orders, setOrders] = useState<Order[]>([]);
@@ -95,11 +87,12 @@ export function Dashboard() {
     }
   }, []);
 
-  // Export exactly what the filters currently show (same applyOrderFilters as the list).
+  // Export exactly what the filters currently show (same applyOrderFilters as the list), with every
+  // date column rendered in the timezone the API reports.
   const downloadCsv = useCallback(() => {
     setDownloading(true);
     try {
-      const csv = ordersToCsv(applyOrderFilters(orders, filters, new Date(), timezone));
+      const csv = ordersToCsv(applyOrderFilters(orders, filters, new Date(), timezone), timezone);
       const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
       const a = document.createElement("a");
       a.href = url;
@@ -246,6 +239,7 @@ export function Dashboard() {
 
           <OrderList
             orders={visible}
+            timezone={timezone}
             hasFilters={!isDefaultFilters}
             onClearFilters={() => setFilters(DEFAULT_FILTERS)}
           />
@@ -263,7 +257,7 @@ export function Dashboard() {
               {failedAccounts.length === 1 ? "" : "s"} need attention:{" "}
               {failedAccounts
                 .slice(0, 5)
-                .map((a) => `${a.label} (${ERROR_TEXT[a.error?.code ?? "UNKNOWN"]})`)
+                .map((a) => `${a.label} (${errorText(a.error?.code)})`)
                 .join(", ")}
               {failedAccounts.length > 5 ? `, +${failedAccounts.length - 5} more` : ""}.
             </div>

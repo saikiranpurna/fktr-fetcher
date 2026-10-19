@@ -22,7 +22,7 @@ from datetime import datetime, timezone
 from typing import Protocol
 
 from .config import config
-from .errors import config_error
+from .errors import AppError, config_error
 
 
 def _now_iso() -> str:
@@ -35,6 +35,8 @@ class StorageBackend(Protocol):
     def load_all(self) -> list[dict]: ...
     def save_many(self, accounts: list[dict]) -> None: ...
     def delete(self, account_id: str) -> None: ...
+    # Bulk removal in one storage pass (the UI removes many selected accounts at once).
+    def delete_many(self, account_ids: list[str]) -> None: ...
     def clear(self) -> None: ...
     def has_any(self) -> bool: ...
 
@@ -83,8 +85,14 @@ class FileBackend:
         self._write_doc(doc)
 
     def delete(self, account_id: str) -> None:
+        self.delete_many([account_id])
+
+    def delete_many(self, account_ids: list[str]) -> None:
+        ids = set(account_ids)
+        if not ids:
+            return
         doc = self._read_doc()
-        remaining = [a for a in doc.get("accounts", []) if a.get("id") != account_id]
+        remaining = [a for a in doc.get("accounts", []) if a.get("id") not in ids]
         if not remaining:
             self.clear()
             return
@@ -189,10 +197,30 @@ class MinioBackend:
     def delete(self, account_id: str) -> None:
         self._s3.delete_object(Bucket=self._bucket, Key=self._key(account_id))
 
+    def delete_many(self, account_ids: list[str]) -> None:
+        self._delete_keys([self._key(aid) for aid in dict.fromkeys(account_ids)])
+
     def clear(self) -> None:
-        keys = [{"Key": k} for k in self._iter_keys()]
-        for i in range(0, len(keys), 1000):  # S3 delete_objects caps at 1000 keys per call
-            self._s3.delete_objects(Bucket=self._bucket, Delete={"Objects": keys[i : i + 1000]})
+        self._delete_keys(list(self._iter_keys()))
+
+    def _delete_keys(self, keys: list[str]) -> None:
+        # S3 delete_objects caps at 1000 keys per call. Quiet mode returns only the failures, and a
+        # failed key is not an exception, so check them instead of reporting a delete that didn't
+        # happen. (A key that is already gone counts as deleted, not as an error.)
+        for i in range(0, len(keys), 1000):
+            resp = self._s3.delete_objects(
+                Bucket=self._bucket,
+                Delete={"Objects": [{"Key": k} for k in keys[i : i + 1000]], "Quiet": True},
+            )
+            errors = (resp or {}).get("Errors") or []
+            if errors:
+                first = errors[0]
+                # A storage refusal is a runtime failure, not a configuration problem.
+                raise AppError(
+                    "UNKNOWN",
+                    f"MinIO could not delete {len(errors)} account object(s) "
+                    f"({first.get('Code', '?')}: {first.get('Message', '')})."
+                )
 
     def has_any(self) -> bool:
         resp = self._s3.list_objects_v2(Bucket=self._bucket, Prefix=self._prefix, MaxKeys=1)

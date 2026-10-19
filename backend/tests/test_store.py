@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from app import store
+from app import storage, store
 from app.errors import AppError
 
 
@@ -84,6 +84,14 @@ def test_duplicate_labels_within_one_blob_are_suffixed(file_store):
     assert n == 2 and sorted(m["id"] for m in meta) == ["dup", "dup-2"]
 
 
+def test_duplicate_labels_within_one_blob_get_the_same_label_suffix(file_store):
+    # The account filter and CSV "Account" column key on the label, so it must be unique too.
+    blob = '[{"label":"Mom","cookie":"SN=1"},{"label":"Mom","cookie":"SN=2"},{"label":"Mom","cookie":"SN=3"}]'
+    store.import_accounts("file", blob)
+    assert {m["id"]: m["label"] for m in store.list_accounts()} == {"mom": "Mom", "mom-2": "Mom-2", "mom-3": "Mom-3"}
+    assert sorted(a["label"] for a in store.get_active_accounts()) == ["Mom", "Mom-2", "Mom-3"]
+
+
 def test_reimport_same_label_upserts_not_duplicates(file_store):
     store.import_accounts("acct", "SN=1")
     store.import_accounts("acct", "SN=2")
@@ -106,6 +114,43 @@ def test_remove_and_clear(file_store):
     assert [m["id"] for m in store.list_accounts()] == ["b"]
     store.clear_all()
     assert store.list_accounts() == []
+
+
+def test_remove_accounts_removes_exactly_the_given_ids(file_store):
+    store.import_accounts("f", '[{"label":"a","cookie":"SN=1"},{"label":"b","cookie":"SN=2"},{"label":"c","cookie":"SN=3"}]')
+    meta = store.remove_accounts(["a", "c", "missing"])
+    assert [m["id"] for m in meta] == ["b"]
+    assert [m["id"] for m in store.list_accounts()] == ["b"]
+    assert store.remove_accounts(["b"]) == [] and store.has_accounts() is False
+
+
+def test_remove_accounts_uses_one_backend_delete_and_one_reload(file_store, monkeypatch):
+    store.import_accounts("f", '[{"label":"a","cookie":"SN=1"},{"label":"b","cookie":"SN=2"}]')
+    backend = storage.get_backend()
+    calls = {"delete_many": 0, "delete": 0, "load_all": 0}
+    for name in calls:
+        real = getattr(backend, name)
+
+        def counted(*args, _real=real, _name=name):
+            calls[_name] += 1
+            return _real(*args)
+
+        monkeypatch.setattr(backend, name, counted)
+    store.remove_accounts(["a", "b"])
+    assert calls == {"delete_many": 1, "delete": 0, "load_all": 1}
+
+
+def test_concurrent_mutations_do_not_lose_writes(file_store):
+    # Handlers run on a threadpool; without the store lock the file backend's read-modify-write
+    # would interleave and drop accounts (and share one .tmp file mid-write).
+    import threading
+
+    threads = [threading.Thread(target=store.add_account, args=(f"acct{i}", f"SN={i}")) for i in range(24)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert len(store.list_accounts()) == 24
 
 
 def test_has_accounts(file_store):
@@ -179,3 +224,17 @@ def test_import_skips_accounts_already_stored(file_store):
 def test_import_keeps_genuinely_distinct_accounts(file_store):
     n, meta = store.import_accounts("file", '[{"label":"a","cookie":"SN=1"},{"label":"b","cookie":"SN=2"}]')
     assert n == 2 and len(meta) == 2
+
+
+def test_import_skips_same_label_same_cookies_repeated_in_one_blob(file_store):
+    # The same entry pasted twice must not become a second account polling the same session.
+    n, meta = store.import_accounts("file", '[{"label":"Mom","cookie":"SN=1"},{"label":"Mom","cookie":"SN=1"}]')
+    assert n == 1 and [m["id"] for m in meta] == ["mom"]
+
+
+def test_redropping_a_blob_with_duplicate_labels_updates_in_place(file_store):
+    store.import_accounts("file", '[{"label":"X","cookie":"SN=1"},{"label":"X","cookie":"SN=2"}]')
+    # Same file re-exported with refreshed cookies: x-2 is updated, no x-3 appears.
+    store.import_accounts("file", '[{"label":"X","cookie":"SN=11"},{"label":"X","cookie":"SN=22"}]')
+    accounts = {a["id"]: a["cookies"] for a in store.get_active_accounts()}
+    assert accounts == {"x": {"SN": "11"}, "x-2": {"SN": "22"}}

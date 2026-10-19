@@ -8,10 +8,12 @@ const PAGE = 60; // cap DOM nodes; large accounts can produce tens of thousands 
 
 export function OrderList({
   orders,
+  timezone = "Asia/Kolkata",
   hasFilters = true,
   onClearFilters,
 }: {
   orders: Order[];
+  timezone?: string; // IANA zone the cards render dates in (the API reports it; IST by default)
   hasFilters?: boolean;
   onClearFilters?: () => void;
 }) {
@@ -58,7 +60,11 @@ export function OrderList({
     <div className="flex flex-col gap-4">
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
         {shown.map((order, i) => (
-          <OrderCard key={`${order.account}:${order.orderId}:${order.trackingId}:${i}`} order={order} />
+          <OrderCard
+            key={`${order.account}:${order.orderId}:${order.trackingId}:${i}`}
+            order={order}
+            timezone={timezone}
+          />
         ))}
       </div>
       {orders.length > shown.length && (
