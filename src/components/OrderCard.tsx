@@ -1,5 +1,7 @@
+import { canDownloadInvoice } from "@/lib/invoice";
 import type { Order } from "@/lib/types";
 import { TONE_CHIP, TONE_DOT, type Tone } from "@/lib/ui";
+import { InvoiceButton } from "./InvoiceButton";
 import { StatusBadge } from "./StatusBadge";
 
 const INR = new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR" });
@@ -7,6 +9,17 @@ const INR = new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR" 
 // "₹1,499.00" for a finite amount; null when the backend has no figure.
 function inr(n: number | null | undefined): string | null {
   return typeof n === "number" && Number.isFinite(n) ? INR.format(n) : null;
+}
+
+// The card's price line. A genuine ₹0 says why instead of "Paid ₹0.00": an order whose payment never
+// went through charged nothing, and a replacement shipment is free. null = no figure from the backend.
+function priceLine(o: Order): { label: string; amount: string | null } | null {
+  const amount = inr(o.pricePaid);
+  if (amount === null) return null;
+  if ((o.pricePaid ?? 0) > 0) return { label: "Paid", amount };
+  if (/not placed/i.test(o.rawStatus)) return { label: "Not charged (order not placed)", amount: null };
+  if (o.replacementOf) return { label: "Free replacement", amount: null };
+  return { label: "Free", amount: null };
 }
 
 // One date formatter per timezone, shared by every card: a page renders up to 60 cards with several
@@ -85,7 +98,7 @@ function lifecycle(o: Order, timeZone: string): LifecycleEntry[] {
 }
 
 export function OrderCard({ order, timezone = "Asia/Kolkata" }: { order: Order; timezone?: string }) {
-  const paid = inr(order.pricePaid);
+  const price = priceLine(order);
   // Delivered beats Expected. A cancelled shipment is never "expected", so its promise date is
   // left to the CSV rather than shown as if it were still coming.
   const delivered = moment(order.deliveredDateIso, timezone);
@@ -130,12 +143,19 @@ export function OrderCard({ order, timezone = "Asia/Kolkata" }: { order: Order; 
 
       <div className="space-y-1">
         <p className="text-sm text-neutral-700 dark:text-neutral-300">{order.itemName}</p>
-        {(paid || eta) && (
+        {(price || eta) && (
           <p className="flex flex-wrap gap-x-3 gap-y-0.5 text-sm text-neutral-600 dark:text-neutral-300">
-            {paid && (
+            {price && (
               <span>
-                Paid{" "}
-                <span className="font-semibold tabular-nums text-neutral-900 dark:text-neutral-100">{paid}</span>
+                {price.label}
+                {price.amount && (
+                  <>
+                    {" "}
+                    <span className="font-semibold tabular-nums text-neutral-900 dark:text-neutral-100">
+                      {price.amount}
+                    </span>
+                  </>
+                )}
               </span>
             )}
             {eta && (
@@ -180,18 +200,23 @@ export function OrderCard({ order, timezone = "Asia/Kolkata" }: { order: Order; 
         </ul>
       )}
 
-      <div className="mt-auto rounded-lg bg-neutral-100 px-3 py-2 dark:bg-neutral-800">
-        <span className="block text-[11px] font-medium uppercase tracking-wide text-neutral-600 dark:text-neutral-400">
-          OTP
-        </span>
-        <span className="font-mono text-2xl font-extrabold tracking-widest text-neutral-900 dark:text-neutral-50">
-          {order.otp ?? (
-            <>
-              <span aria-hidden>—</span>
-              <span className="sr-only">unavailable</span>
-            </>
-          )}
-        </span>
+      <div className="mt-auto flex flex-col gap-2">
+        {/* Keyed by order: the list keys cards by position, so a card reused for another order
+            must not inherit this one's busy/error state. */}
+        {canDownloadInvoice(order) && <InvoiceButton key={`${order.accountId}:${order.orderId}`} order={order} />}
+        <div className="rounded-lg bg-neutral-100 px-3 py-2 dark:bg-neutral-800">
+          <span className="block text-[11px] font-medium uppercase tracking-wide text-neutral-600 dark:text-neutral-400">
+            OTP
+          </span>
+          <span className="font-mono text-2xl font-extrabold tracking-widest text-neutral-900 dark:text-neutral-50">
+            {order.otp ?? (
+              <>
+                <span aria-hidden>—</span>
+                <span className="sr-only">unavailable</span>
+              </>
+            )}
+          </span>
+        </div>
       </div>
     </article>
   );

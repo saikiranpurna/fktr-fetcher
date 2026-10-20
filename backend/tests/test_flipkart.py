@@ -1,10 +1,13 @@
 """flipkart.py contract: page 1 must succeed, later pages are best-effort (partial=True instead of a
-silent truncation), detail calls RAISE instead of returning {}, and failures log the upstream body."""
+silent truncation), detail and invoice calls RAISE instead of returning empty data, and failures log
+the upstream body (never cookies)."""
 
 from __future__ import annotations
 
+import io
 import logging
 import time
+import zipfile
 
 import pytest
 
@@ -136,6 +139,68 @@ def test_fetch_detail_raw_raises_on_network_error(monkeypatch):
 def test_fetch_detail_raw_returns_raw_json(monkeypatch):
     monkeypatch.setattr(flipkart.Fetcher, "post", lambda *a, **k: _DetailRes(200, b"{}", {"RESPONSE": {"slots": []}}))
     assert flipkart.fetch_detail_raw({"SN": "1"}, "OD1", "U1") == {"RESPONSE": {"slots": []}}
+
+
+# ── invoices ────────────────────────────────────────────────────────────────
+
+class _InvoiceRes:
+    def __init__(self, status: int, body: bytes, headers: dict | None = None):
+        self.status = status
+        self.body = body
+        self.headers = headers or {}
+
+
+def _zip_of(*names: str) -> bytes:
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        for name in names:
+            zf.writestr(name, b"%PDF-1.4 fabricated")
+    return buf.getvalue()
+
+
+def test_fetch_invoice_returns_the_file_and_never_follows_redirects(monkeypatch):
+    seen: dict = {}
+
+    def fake_get(url, **kwargs):
+        seen.update(kwargs, url=url)
+        return _InvoiceRes(200, _zip_of("file_1.pdf"))
+
+    monkeypatch.setattr(flipkart.Fetcher, "get", fake_get)
+    assert flipkart.fetch_invoice({"SN": "1"}, "OD123456")[:2] == b"PK"
+    assert seen["url"].endswith("/self-serve/invoice/download/OD123456")
+    assert seen["follow_redirects"] is False  # a followed redirect would carry the cookies along
+
+
+_TRY_LATER = b'{"x":"Please try again later","ERROR_MESSAGE":"500","STATUS_CODE":500,"RESPONSE":null,"ERROR_CODE":0}'
+
+
+@pytest.mark.parametrize(
+    ("res", "code"),
+    [
+        (_InvoiceRes(401, b""), "AUTH_EXPIRED"),
+        (_InvoiceRes(302, b"", {"Location": "https://www.flipkart.com/account/login?ret=/"}), "AUTH_EXPIRED"),
+        (_InvoiceRes(302, b"", {"Location": "https://files.example/invoice.zip"}), "UPSTREAM_ERROR"),
+        (_InvoiceRes(500, _TRY_LATER), "INVOICE_UNAVAILABLE"),  # what an undispatched order gets
+        (_InvoiceRes(503, b"<html>busy</html>"), "UPSTREAM_ERROR"),
+        (_InvoiceRes(200, b"<html>sign in</html>"), "PARSE_ERROR"),
+    ],
+)
+def test_fetch_invoice_maps_each_failure_to_a_typed_error(monkeypatch, caplog, res, code):
+    monkeypatch.setattr(flipkart.Fetcher, "get", lambda *a, **k: res)
+    with caplog.at_level(logging.INFO, logger="flipkart"), pytest.raises(AppError) as exc:
+        flipkart.fetch_invoice({"SN": "cookie-value"}, "OD123456")
+    assert exc.value.code == code
+    assert "cookie-value" not in caplog.text
+
+
+def test_fetch_invoice_network_error_is_upstream(monkeypatch):
+    def boom(*a, **k):
+        raise ConnectionError("reset")
+
+    monkeypatch.setattr(flipkart.Fetcher, "get", boom)
+    with pytest.raises(AppError) as exc:
+        flipkart.fetch_invoice({"SN": "1"}, "OD123456")
+    assert exc.value.code == "UPSTREAM_ERROR"
 
 
 class _HtmlRes(_FakeRes):

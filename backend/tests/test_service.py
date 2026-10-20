@@ -1,17 +1,20 @@
-"""service.py: detail-call targeting (active -> history window -> address) and the per-unit
-detailStatus that keeps "no data" distinguishable from "fetch failed / not attempted"."""
+"""service.py: detail-call targeting (active -> history window -> address), the per-unit
+detailStatus that keeps "no data" distinguishable from "fetch failed / not attempted", and the
+on-demand invoice downloads (one card's tax invoice, a ZIP of the filtered cards')."""
 
 from __future__ import annotations
 
+import io
 import json
 import time
+import zipfile
 from pathlib import Path
 
 import pytest
 
-from app import flipkart, service
+from app import flipkart, invoice_docs, poller, service
 from app.config import config
-from app.errors import upstream
+from app.errors import AppError, auth_expired, upstream
 
 _DAY_MS = 24 * 60 * 60 * 1000
 _DETAIL = json.loads((Path(__file__).parent / "fixtures" / "lifecycle-detail.json").read_text(encoding="utf-8"))
@@ -45,6 +48,12 @@ def test_targets_prioritise_active_then_recent_history_then_addresses(caps):
         ("REC", "REC-u0"),  # one call per recent lifecycle order covers all its units' timelines
         ("OLD", "OLD-u0"), ("DEL", "DEL-u0"),  # address-only, in list order
     ]
+
+
+def test_targets_skip_add_on_units_even_without_vas_details(caps):
+    order = _order("MIX", "Out for delivery", units=2)
+    order["units"]["MIX-u0"]["metaData"]["type"] = "digital_service"  # a trust shield on the product
+    assert [(oid, uid) for oid, uid, _ in service._detail_targets([order])] == [("MIX", "MIX-u1")]
 
 
 def test_history_tier_is_capped_and_can_be_disabled(caps, monkeypatch):
@@ -118,3 +127,148 @@ def test_max_details_zero_only_drops_address_lookups(caps, monkeypatch):
     monkeypatch.setattr(config, "max_details", 0)
     raw = [_order("ACT", "Out for delivery"), _order("REC", "Cancelled on Oct 18", days_ago=1), _order("DEL", "Delivered")]
     assert [t[0] for t in service._detail_targets(raw)] == ["ACT", "REC"]
+
+
+
+
+# ── invoices ────────────────────────────────────────────────────────────────
+# Bundles are ZIPs of fake "PDFs" whose bytes double as their text (invoice_docs.pdf_text is stubbed);
+# test_invoice_docs covers reading real PDFs.
+
+def _doc(text: str) -> bytes:
+    return f"%PDF-1.4 {text}".encode()
+
+
+def _bundle(*docs: bytes) -> bytes:
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        for i, doc in enumerate(docs, start=1):
+            zf.writestr(f"file_{i}.pdf", doc)
+    return buf.getvalue()
+
+
+TAX_S1, TAX_S2 = _doc("Tax Invoice FSN SPKA serial S1"), _doc("Tax Invoice FSN SPKA serial S2")
+FEE = _doc("Contact Flipkart SAC fee")
+SHIP = _doc("Consignor details FSN SPKA")
+OD1, OD2 = "OD900000000000000001", "OD900000000000000002"
+ROWS = {
+    oid: [
+        {"orderId": oid, "unitId": "U1", "fsn": "SPKA", "trackingId": "FMPP0000000001"},
+        {"orderId": oid, "unitId": "U2", "fsn": "SPKA", "trackingId": "FMPP0000000002"},
+        {"orderId": oid, "unitId": "U3", "fsn": "SPKA", "trackingId": ""},  # cancelled before shipping
+    ]
+    for oid in (OD1, OD2)
+}
+
+
+@pytest.fixture
+def roster(monkeypatch):
+    """Two known accounts in the poller's roster (anything else is unknown or paused), their cached
+    rows, and fake-PDF text."""
+    known = {"home": {"SN": "1"}, "shop": {"SN": "2"}}
+    monkeypatch.setattr(poller.instance, "cookies_for", lambda aid: known.get(aid))
+    monkeypatch.setattr(poller.instance, "order_rows", lambda aid, oid: ROWS.get(oid, []) if aid in known else [])
+    monkeypatch.setattr(invoice_docs, "pdf_text", lambda data: data.decode())
+
+
+def test_a_card_downloads_only_its_own_tax_invoice(roster, monkeypatch):
+    monkeypatch.setattr(flipkart, "fetch_invoice", lambda cookies, oid: _bundle(SHIP, TAX_S1, FEE, TAX_S2))
+    assert service.fetch_invoice("home", OD1, "U2") == (TAX_S2, "FMPP0000000002")
+    assert service.fetch_invoice("home", OD1, "U1") == (TAX_S1, "FMPP0000000001")
+
+
+@pytest.mark.parametrize(
+    ("account", "unit", "code"),
+    [
+        ("home", "U9", "CONFIG_ERROR"),  # not in the cached list (a stale page)
+        ("gone", "U1", "CONFIG_ERROR"),  # unknown or paused account
+        ("home", "U3", "INVOICE_UNAVAILABLE"),  # never shipped
+    ],
+)
+def test_a_card_without_an_invoice_gets_a_typed_error(roster, monkeypatch, account, unit, code):
+    monkeypatch.setattr(flipkart, "fetch_invoice", lambda cookies, oid: _bundle(TAX_S1, TAX_S2))
+    with pytest.raises(AppError) as exc:
+        service.fetch_invoice(account, OD1, unit)
+    assert exc.value.code == code
+
+
+def test_a_bundle_without_the_cards_invoice_is_unavailable_and_a_broken_one_a_parse_error(roster, monkeypatch):
+    monkeypatch.setattr(flipkart, "fetch_invoice", lambda cookies, oid: _bundle(FEE, SHIP))
+    with pytest.raises(AppError) as exc:
+        service.fetch_invoice("home", OD1, "U1")
+    assert exc.value.code == "INVOICE_UNAVAILABLE"
+
+    monkeypatch.setattr(flipkart, "fetch_invoice", lambda cookies, oid: b"PK\x03\x04 cut short")
+    with pytest.raises(AppError) as exc:
+        service.fetch_invoice("home", OD1, "U1")
+    assert exc.value.code == "PARSE_ERROR"
+
+
+def test_invoices_zip_holds_exactly_the_requested_cards(roster, monkeypatch):
+    calls: list[str] = []
+
+    def fake(cookies, oid):
+        calls.append(oid)
+        return _bundle(SHIP, TAX_S1, FEE, TAX_S2)
+
+    monkeypatch.setattr(flipkart, "fetch_invoice", fake)
+    dest = io.BytesIO()
+    # Only U2 passed the filters: U1's invoice stays out, though it sits in the same bundle.
+    request = [{"orderId": OD1, "accountIds": ["home"], "unitIds": ["U2"]}]
+    assert service.build_invoices_zip(request, dest) == {"files": 1, "missing": 0}
+    zf = zipfile.ZipFile(io.BytesIO(dest.getvalue()))
+    assert zf.namelist() == [f"{OD1}/FMPP0000000002.pdf"]
+    assert zf.read(f"{OD1}/FMPP0000000002.pdf") == TAX_S2
+
+    # The same order listed twice (shared between accounts) is fetched once.
+    request = [
+        {"orderId": OD2, "accountIds": ["home"], "unitIds": ["U1"]},
+        {"orderId": OD2, "accountIds": ["shop"], "unitIds": ["U1", "U2"]},
+    ]
+    assert service.build_invoices_zip(request, io.BytesIO()) == {"files": 2, "missing": 0}
+    assert calls == [OD1, OD2]
+
+
+def test_invoices_zip_lists_cards_without_an_invoice_and_falls_back_across_accounts(roster, monkeypatch):
+    calls: list[str] = []
+
+    def fake(cookies, oid):
+        calls.append(cookies["SN"])
+        if cookies["SN"] == "1":
+            raise auth_expired()  # "home"'s session expired
+        return _bundle(TAX_S1)  # only one tax invoice so far
+
+    monkeypatch.setattr(flipkart, "fetch_invoice", fake)
+    dest = io.BytesIO()
+    request = [{"orderId": OD1, "accountIds": ["gone", "home", "shop"], "unitIds": ["U1", "U2", "U3", "U9"]}]
+    assert service.build_invoices_zip(request, dest) == {"files": 1, "missing": 3}
+    assert calls == ["1", "2"]  # "gone" isn't in the roster and home's session expired: shop fetched it
+    zf = zipfile.ZipFile(io.BytesIO(dest.getvalue()))
+    assert sorted(zf.namelist()) == [f"{OD1}/FMPP0000000001.pdf", "missing.txt"]
+    missing = zf.read("missing.txt").decode()
+    assert f"{OD1}\tFMPP0000000002\tINVOICE_UNAVAILABLE\t" in missing  # no tax invoice for it yet
+    assert f"{OD1}\tU3\tINVOICE_UNAVAILABLE\t" in missing  # never shipped
+    assert f"{OD1}\tU9\tCONFIG_ERROR\t" in missing  # not in the cached list
+
+
+def test_invoices_zip_raises_instead_of_an_empty_zip_and_enforces_the_cap(roster, monkeypatch):
+    one = [{"orderId": OD1, "accountIds": ["home"], "unitIds": ["U1"]}]
+
+    def expired(cookies, oid):
+        raise auth_expired()
+
+    monkeypatch.setattr(flipkart, "fetch_invoice", expired)
+    with pytest.raises(AppError) as exc:
+        service.build_invoices_zip(one, io.BytesIO())
+    assert exc.value.code == "AUTH_EXPIRED"  # nothing saved: the order's own error, no ZIP
+
+    monkeypatch.setattr(flipkart, "fetch_invoice", lambda cookies, oid: _bundle(FEE, SHIP))
+    with pytest.raises(AppError) as exc:  # fetched fine, but no requested card had a tax invoice
+        service.build_invoices_zip(one, io.BytesIO())
+    assert exc.value.code == "INVOICE_UNAVAILABLE"
+
+    monkeypatch.setattr(config, "invoice_zip_max", 1)
+    two = [{"orderId": oid, "accountIds": ["home"], "unitIds": ["U1"]} for oid in (OD1, OD2)]
+    with pytest.raises(AppError) as exc:
+        service.build_invoices_zip(two, io.BytesIO())
+    assert exc.value.code == "CONFIG_ERROR"

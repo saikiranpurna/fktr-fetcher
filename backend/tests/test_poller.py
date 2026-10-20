@@ -61,7 +61,12 @@ def test_fetch_one_populates_cache_and_coverage(p, monkeypatch):
     p._fetch_one("a")
 
     snap = p.snapshot()
-    assert snap["orders"] == [{"orderId": "O1", "account": "Home"}]
+    # Rows carry the account id too: an invoice download sends it back to find the cookies.
+    assert snap["orders"] == [{"orderId": "O1", "account": "Home", "accountId": "a"}]
+    assert p.cookies_for("a") == {"SN": "1"} and p.cookies_for("nope") is None
+    # One order's cached rows: what pairs an invoice bundle with its shipments.
+    assert p.order_rows("a", "O1") == snap["orders"]
+    assert p.order_rows("a", "O2") == [] and p.order_rows("nope", "O1") == []
     acct = snap["accounts"][0]
     assert acct["ok"] is True and acct["count"] == 1 and "pending" not in acct
     cov = snap["coverage"]
@@ -230,6 +235,29 @@ def test_partial_and_detail_failures_surface_in_snapshot(p, monkeypatch):
     p._fetch_one("a")
     acct = by_id()["a"]
     assert (acct["partial"], acct["detailFailed"]) == (False, 0)
+
+
+def test_a_partial_fetch_keeps_the_older_orders_it_did_not_reach(p, monkeypatch):
+    # Live 2026-10-20: Flipkart answered a later history page with HTTP 500, and the partial fetch
+    # replaced an account's 3,385 rows with the 297 it had reached.
+    monkeypatch.setattr(store, "get_active_accounts", lambda: [{"id": "a", "label": "A", "cookies": {"SN": "1"}}])
+    answers = iter([
+        ([{"orderId": "O3", "status": "ARRIVING"}, {"orderId": "O2"}, {"orderId": "O1"}], OK_META),
+        ([{"orderId": "O3", "status": "DELIVERED"}], {"partial": True, "detailFailed": 0}),
+        ([{"orderId": "O3", "status": "DELIVERED"}], OK_META),
+    ])
+    monkeypatch.setattr(service, "fetch_account_orders", lambda label, cookies: next(answers))
+    p._sync_roster()
+
+    def rows() -> list[tuple]:
+        return [(o["orderId"], o.get("status"), o["accountId"]) for o in p.snapshot()["orders"]]
+
+    p._fetch_one("a")
+    p._fetch_one("a")  # partial: O3 is fresh, O2 and O1 carried over from the last fetch
+    assert rows() == [("O3", "DELIVERED", "a"), ("O2", None, "a"), ("O1", None, "a")]
+    assert p.snapshot()["accounts"][0]["count"] == 3
+    p._fetch_one("a")  # a complete fetch is the whole truth again
+    assert rows() == [("O3", "DELIVERED", "a")]
 
 
 def test_scales_to_1000_accounts_reads_instant_concurrency_bounded(monkeypatch, tmp_path):

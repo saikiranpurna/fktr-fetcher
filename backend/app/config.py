@@ -75,6 +75,11 @@ class Config:
     orders_base: str = os.environ.get("FLIPKART_ORDERS_BASE", "https://www.flipkart.com/api/5/self-serve/orders/")
     detail_url: str = os.environ.get("FLIPKART_DETAIL_URL", "https://www.flipkart.com/api/4/page/fetch?")
     filter_type: str = os.environ.get("FLIPKART_FILTER_TYPE", "PREORDER_UNITS")
+    # Order invoices: GET <this><orderId> answers a ZIP of the order's invoice PDFs.
+    invoice_url: str = os.environ.get("FLIPKART_INVOICE_URL", "https://www.flipkart.com/api/1/self-serve/invoice/download/")
+    # Max orders in one bulk invoice ZIP. One bulk order's invoices run to several MB, so the ZIP
+    # is spooled to a temp file, and this bounds both its size and the Flipkart calls behind it.
+    invoice_zip_max: int = max(1, _int("INVOICE_ZIP_MAX", 100))
     # curl_cffi TLS-impersonation profile used by Scrapling's Fetcher.
     impersonate: str = os.environ.get("FLIPKART_IMPERSONATE", "chrome")
     # ── Cookie storage backend ───────────────────────────────────────────────

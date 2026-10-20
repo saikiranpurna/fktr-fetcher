@@ -1,8 +1,16 @@
 """Parse Flipkart 'My Orders' list + per-order detail into the frontend Order shape.
 
 Each order holds a MAP of units (one per shipment); we emit ONE ROW PER UNIT, skipping free add-ons
-(VAS: memberships, trust shield). Field paths below were verified against live captures (2026-10-19)
-of the list (/api/5/self-serve/orders) and detail (/api/4/page/fetch) responses:
+(VAS: memberships, trust shield, voucher freebies; see is_addon). Field paths below were verified
+against live captures (2026-10-19) of the list (/api/5/self-serve/orders) and detail
+(/api/4/page/fetch) responses:
+
+  unitId / fsn        list    the units map key / units.<id>.metaData.fsn (the product's tax invoice in
+                              the order's invoice bundle names this FSN; see invoice_docs)
+  add-ons             list    units.<id>.vasItemDetails present, or units.<id>.metaData.type
+                              "digital_service" (products are "physical") charging nothing
+                              (moneyDataBag.amount 0). Verified 2026-10-20: bulk-order trust-shield
+                              units come WITHOUT vasItemDetails
 
   pricePaid           list    per unit, whichever of moneyDataBag.amount (usual: after offers, incl.
                               fees) or the sum of moneyDataBag.paymentMethods[].amounts[].value
@@ -163,6 +171,19 @@ def is_lifecycle_unit(unit: Any) -> bool:
 
 
 # --- product / units --------------------------------------------------------
+
+def is_addon(unit: Any) -> bool:
+    """A free add-on riding on a product (trust shield, membership, voucher freebie), not a shipment.
+    Most carry vasItemDetails, but trust-shield units in some bulk orders don't; those are
+    metaData.type "digital_service" (products are "physical") and charge nothing. A digital_service
+    unit that DID charge something stays a row, so a paid digital item never vanishes with its price."""
+    if get(unit, "vasItemDetails") is not None:
+        return True
+    if _s(get(unit, "metaData.type")).strip().lower() != "digital_service":
+        return False
+    amount = _amount(get(unit, "moneyDataBag.amount"))
+    return amount is None or amount <= 0
+
 
 def _product_title(order: dict, unit: dict) -> str:
     bag = get(order, "productDataBag")
@@ -428,7 +449,7 @@ def parse_orders(
         units = units if isinstance(units, dict) else {}
         items = list(units.items())
         # Skip free add-ons (membership, trust shield); fall back to all units if that leaves nothing.
-        real = [(uid, u) for uid, u in items if get(u, "vasItemDetails") is None] or items
+        real = [(uid, u) for uid, u in items if not is_addon(u)] or items
         if not real:
             continue
 
@@ -494,6 +515,9 @@ def parse_orders(
 
             out.append({
                 "orderId": order_id,
+                "unitId": _s(unit_id).strip(),
+                # The product's Flipkart id: its tax invoice in the order's bundle names it.
+                "fsn": _s(get(u, "metaData.fsn")).strip(),
                 "trackingId": _s(get(u, "metaData.trackingId")).strip(),
                 "customerName": customer,
                 "itemName": _product_title(order, u) or "Unknown item",

@@ -8,6 +8,8 @@ data
 .env
 .env.*
 .flipkart-session.json
+# live Flipkart session cookies: never part of an image or its build cache
+docs/cookies
 *.log
 npm-debug.log*
 Dockerfile

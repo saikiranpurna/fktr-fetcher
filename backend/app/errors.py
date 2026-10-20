@@ -11,6 +11,9 @@ CODE_STATUS: dict[str, int] = {
     "UPSTREAM_ERROR": 502,  # network/timeout/5xx/other 4xx
     "PARSE_ERROR": 502,     # response shape unexpected
     "CONFIG_ERROR": 400,    # missing account or endpoint
+    # Flipkart has no invoice for the order: none until a unit is dispatched. Flipkart answers that
+    # with the same HTTP 500 "Please try again later" as a transient fault, so the text covers both.
+    "INVOICE_UNAVAILABLE": 404,
     "UNKNOWN": 500,
 }
 
@@ -44,6 +47,10 @@ def upstream(message: str) -> AppError:
 
 def parse_error(message: str) -> AppError:
     return AppError("PARSE_ERROR", message)
+
+
+def invoice_unavailable(message: str) -> AppError:
+    return AppError("INVOICE_UNAVAILABLE", message)
 
 
 def to_error_response(err: Exception) -> tuple[dict, int]:

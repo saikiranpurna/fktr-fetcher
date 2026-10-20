@@ -48,6 +48,19 @@ describe("OrderCard", () => {
     expect(screen.getByText("2 Jul, 01:30").parentElement?.textContent).toBe("Expected 2 Jul, 01:30");
   });
 
+  it("explains a genuine ₹0 instead of showing Paid ₹0.00", () => {
+    const priceText = () => screen.getByText(/^(Paid|Not charged|Free)/).textContent;
+    render(<OrderCard order={order({ pricePaid: 0, rawStatus: "Order Not Placed", status: "OTHER" })} />);
+    expect(priceText()).toBe("Not charged (order not placed)");
+    cleanup();
+    render(<OrderCard order={order({ pricePaid: 0, replacementOf: "FMPPORIG000001", status: "DELIVERED" })} />);
+    expect(priceText()).toBe("Free replacement");
+    cleanup();
+    render(<OrderCard order={order({ pricePaid: 0, status: "DELIVERED", rawStatus: "Delivered on Oct 02" })} />);
+    expect(priceText()).toBe("Free");
+    expect(screen.queryByText(/₹0/)).toBeNull();
+  });
+
   it("prefers the delivered date over the expected one, and renders dates in the given timezone", () => {
     render(
       <OrderCard
@@ -128,6 +141,19 @@ describe("OrderCard", () => {
     render(<OrderCard order={order({ trackingId: "FMPPNEW0000001", replacementOf: "FMPPORIG000001" })} />);
     expect(screen.getByText(/Replacement of/).textContent).toBe("Replacement of FMPPORIG000001");
     expect(screen.getByText("FMPPNEW0000001")).toBeTruthy();
+  });
+
+  it("offers the invoice download only on delivered shipments of a known account", () => {
+    const button = () => screen.queryByRole("button", { name: "Download invoice for order OD001" });
+    const known = { accountId: "seller-north", unitId: "U1" };
+    render(<OrderCard order={order({ status: "DELIVERED", otp: null, ...known })} />);
+    expect(button()).toBeTruthy();
+    cleanup();
+    render(<OrderCard order={order(known)} />); // still out for delivery
+    expect(button()).toBeNull();
+    cleanup();
+    render(<OrderCard order={order({ status: "DELIVERED", otp: null })} />); // older backend: no ids
+    expect(button()).toBeNull();
   });
 
   it("notes when the shipment's detail lookup failed, but not when it was skipped", () => {

@@ -9,12 +9,25 @@
 # the backend reaches it over the compose network. Don't widen these bindings.
 
 services:
+  # One-shot: hand the MinIO volume to MinIO's user (65532) before it starts. A brand-new volume is
+  # fine, but one left by an earlier install (e.g. the old root-run minio/minio image) is root-owned,
+  # and MinIO then crash-loops with "file access denied", which compose reports as "unhealthy".
+  minio-perms:
+    image: busybox:1.37.0
+    command: ["chown", "-R", "65532:65532", "/data"]
+    volumes:
+      - minio:/data
+    restart: "no"
+
   minio:
     # MinIO stopped publishing community images (docker.io/minio/minio and quay.io/minio/minio
     # now deny pulls), so use Chainguard's from-source build. Its free tier only ships :latest,
-    # so pin the digest for reproducible builds.
+    # so pin the digest for reproducible builds. It runs as the non-root user 65532.
     image: cgr.dev/chainguard/minio:latest@sha256:709099319add48dfb44aa596a7070d3ddd8dd04d7ae881765719aec29df9e510
     command: server /data --console-address ":9001"
+    depends_on:
+      minio-perms:
+        condition: service_completed_successfully
     environment:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
@@ -49,6 +62,9 @@ services:
       FLIPKART_HISTORY_DAYS: ${FLIPKART_HISTORY_DAYS:-30}
       FLIPKART_MAX_HISTORY_DETAILS: ${FLIPKART_MAX_HISTORY_DETAILS:-150}
       FLIPKART_TIMEOUT_MS: ${FLIPKART_TIMEOUT_MS:-20000}
+      # Order invoices (GET <url><orderId> -> ZIP of PDFs) and the cap on orders per bulk ZIP.
+      FLIPKART_INVOICE_URL: ${FLIPKART_INVOICE_URL:-https://www.flipkart.com/api/1/self-serve/invoice/download/}
+      INVOICE_ZIP_MAX: ${INVOICE_ZIP_MAX:-100}
       ADMIN_TOKEN: ${ADMIN_TOKEN:-}
       # Browser origins allowed to call the API (comma-separated). Blank = the local UI
       # (http://localhost:3100, http://127.0.0.1:3100, and :3000 for `npm run dev`).

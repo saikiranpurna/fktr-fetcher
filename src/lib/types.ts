@@ -11,7 +11,14 @@ export type RefundStatus = "completed" | "initiated" | "";
 // One row per shipment (unit): a multi-item order yields one Order per unit.
 export interface Order {
   account: string; // label of the Flipkart account this order came from
+  // That account's id (stable when the label is renamed): invoice downloads send it back. The
+  // backend always emits it; optional so the frozen extension's parser still type-checks.
+  accountId?: string;
   orderId: string;
+  // Flipkart's id for this unit within the order, and its product's FSN: an invoice download sends
+  // the unit back and the backend finds its tax invoice by FSN. Optional for the frozen extension.
+  unitId?: string;
+  fsn?: string;
   trackingId: string; // shipment/tracking id (e.g. FMPP4118839140); "" when not yet shipped
   customerName: string; // "Unknown customer" when source field missing
   itemName: string; // product title of THIS unit
@@ -58,6 +65,7 @@ export type ErrorCode =
   | "UPSTREAM_ERROR" // network/timeout/5xx/other 4xx    -> HTTP 502
   | "PARSE_ERROR" // response shape unexpected         -> HTTP 502
   | "CONFIG_ERROR" // missing account or endpoint URL   -> HTTP 400
+  | "INVOICE_UNAVAILABLE" // no invoice yet (undispatched) -> HTTP 404
   | "UNKNOWN"; //                                   -> HTTP 500
 
 // Per-account outcome of one fetch, surfaced so a single expired cookie
@@ -103,6 +111,7 @@ export interface OrdersResponse {
   coverage: Coverage;
   fetchedAt: string; // ISO
   timezone: string;
+  invoiceZipMax?: number; // most orders one bulk invoice ZIP may hold (INVOICE_ZIP_MAX)
 }
 
 export interface AccountsResponse {
