@@ -15,6 +15,9 @@ from app import service, store
 from app.config import config
 from app.errors import AppError
 
+# service.fetch_account_orders returns (orders, meta); a clean fetch has nothing to flag.
+OK_META = {"partial": False, "detailFailed": 0}
+
 
 class FakeExecutor:
     """Records submissions without running them (keeps ids 'in flight' for scheduling tests)."""
@@ -51,7 +54,9 @@ def test_sync_roster_tracks_new_and_prunes_removed(p, monkeypatch):
 
 def test_fetch_one_populates_cache_and_coverage(p, monkeypatch):
     monkeypatch.setattr(store, "get_active_accounts", lambda: [{"id": "a", "label": "Home", "cookies": {"SN": "1"}}])
-    monkeypatch.setattr(service, "fetch_account_orders", lambda label, cookies: [{"orderId": "O1", "account": label}])
+    monkeypatch.setattr(
+        service, "fetch_account_orders", lambda label, cookies: ([{"orderId": "O1", "account": label}], OK_META)
+    )
     p._sync_roster()
     p._fetch_one("a")
 
@@ -72,7 +77,7 @@ def test_failing_account_is_flagged_without_blanking_others(p, monkeypatch):
     def fake(label, cookies):
         if label == "Bad":
             raise AppError("AUTH_EXPIRED", "session expired")
-        return [{"orderId": "O1", "account": label}]
+        return [{"orderId": "O1", "account": label}], OK_META
 
     monkeypatch.setattr(service, "fetch_account_orders", fake)
     p._sync_roster()
@@ -94,7 +99,7 @@ def test_transient_error_keeps_last_good_orders(p, monkeypatch):
     def fake(label, cookies):
         if state["fail"]:
             raise AppError("UPSTREAM_ERROR", "timeout")
-        return [{"orderId": "O1", "account": label}]
+        return [{"orderId": "O1", "account": label}], OK_META
 
     monkeypatch.setattr(service, "fetch_account_orders", fake)
     p._sync_roster()
@@ -109,7 +114,7 @@ def test_transient_error_keeps_last_good_orders(p, monkeypatch):
 
 def test_due_scheduling_respects_interval(p, monkeypatch):
     monkeypatch.setattr(store, "get_active_accounts", lambda: [{"id": "a", "label": "A", "cookies": {"SN": "1"}}])
-    monkeypatch.setattr(service, "fetch_account_orders", lambda label, cookies: [])
+    monkeypatch.setattr(service, "fetch_account_orders", lambda label, cookies: ([], OK_META))
     fake = FakeExecutor()
     p._executor = fake
 
@@ -125,6 +130,106 @@ def test_due_scheduling_respects_interval(p, monkeypatch):
     p._cache["a"].fetched_monotonic = time.monotonic() - 2000  # older than 1800s interval
     p._submit_due()
     assert fake.calls == [("a",)]
+
+
+def test_redropped_cookie_makes_expired_account_due_immediately(p, monkeypatch):
+    """Regression: a fresh cookie dropped over an expired one used to keep showing "Session
+    expired" until the 30-min refresh interval ran out."""
+    roster = [{"id": "a", "label": "A", "cookies": {"SN": "v1"}}]
+    monkeypatch.setattr(store, "get_active_accounts", lambda: roster)
+    state = {"v1_expired": False}
+
+    def fake(label, cookies):
+        if cookies["SN"] == "v1" and state["v1_expired"]:
+            raise AppError("AUTH_EXPIRED", "session expired")
+        return [{"orderId": f"O-{cookies['SN']}", "account": label}], OK_META
+
+    monkeypatch.setattr(service, "fetch_account_orders", fake)
+    ex = FakeExecutor()
+    p._executor = ex
+    p._sync_roster()
+    p._fetch_one("a")                     # good fetch with v1
+    state["v1_expired"] = True
+    p._fetch_one("a")                     # v1 has since expired
+    assert p.snapshot()["accounts"][0]["error"]["code"] == "AUTH_EXPIRED"
+    p._submit_due()
+    assert ex.calls == []                 # just fetched -> would wait out the interval
+
+    roster[0] = {"id": "a", "label": "A", "cookies": {"SN": "v2"}}  # user re-drops a fresh cookie
+    p._sync_roster()
+    assert [o["orderId"] for o in p.snapshot()["orders"]] == ["O-v1"]  # last orders kept meanwhile
+    p._submit_due()
+    assert ex.calls == [("a",)]           # due on the very next tick
+
+    p._fetch_one("a")
+    acct = p.snapshot()["accounts"][0]
+    assert acct["ok"] is True and "error" not in acct
+    assert [o["orderId"] for o in p.snapshot()["orders"]] == ["O-v2"]
+
+
+def test_unchanged_cookie_on_resync_does_not_force_refetch(p, monkeypatch):
+    monkeypatch.setattr(store, "get_active_accounts", lambda: [{"id": "a", "label": "A", "cookies": {"SN": "1"}}])
+    monkeypatch.setattr(service, "fetch_account_orders", lambda label, cookies: ([], OK_META))
+    ex = FakeExecutor()
+    p._executor = ex
+    p._sync_roster()
+    p._fetch_one("a")
+    p._sync_roster()                      # periodic re-read returns equal (but new) dicts
+    p._submit_due()
+    assert ex.calls == []
+
+
+def test_cookie_redropped_during_inflight_fetch_stays_due(p, monkeypatch):
+    """A fetch still running with the old cookie must not stamp the account as freshly fetched,
+    or the new cookie would wait a full interval anyway."""
+    roster = [{"id": "a", "label": "A", "cookies": {"SN": "old"}}]
+    monkeypatch.setattr(store, "get_active_accounts", lambda: roster)
+
+    def fake(label, cookies):
+        roster[0] = {"id": "a", "label": "A", "cookies": {"SN": "new"}}  # re-dropped mid-fetch
+        p._sync_roster()
+        raise AppError("AUTH_EXPIRED", "session expired")
+
+    monkeypatch.setattr(service, "fetch_account_orders", fake)
+    ex = FakeExecutor()
+    p._executor = ex
+    p._sync_roster()
+    p._fetch_one("a")
+    p._submit_due()
+    assert ex.calls == [("a",)]
+
+
+def test_partial_and_detail_failures_surface_in_snapshot(p, monkeypatch):
+    monkeypatch.setattr(store, "get_active_accounts", lambda: [
+        {"id": "a", "label": "A", "cookies": {"SN": "1"}},
+        {"id": "b", "label": "B", "cookies": {"SN": "2"}},
+    ])
+    result: dict = {"meta": {"partial": True, "detailFailed": 3}, "fail": False}
+
+    def fake(label, cookies):
+        if result["fail"]:
+            raise AppError("UPSTREAM_ERROR", "timeout")
+        return [{"orderId": "O1", "account": label}], result["meta"]
+
+    monkeypatch.setattr(service, "fetch_account_orders", fake)
+    p._sync_roster()
+    p._fetch_one("a")
+
+    def by_id() -> dict:
+        return {a["id"]: a for a in p.snapshot()["accounts"]}
+
+    assert (by_id()["a"]["partial"], by_id()["a"]["detailFailed"]) == (True, 3)
+    assert "partial" not in by_id()["b"] and "detailFailed" not in by_id()["b"]  # never fetched yet
+
+    result["fail"] = True                 # failure keeps the flags of the orders still served
+    p._fetch_one("a")
+    acct = by_id()["a"]
+    assert acct["ok"] is False and (acct["partial"], acct["detailFailed"]) == (True, 3)
+
+    result.update(fail=False, meta=OK_META)  # the next good fetch resets them
+    p._fetch_one("a")
+    acct = by_id()["a"]
+    assert (acct["partial"], acct["detailFailed"]) == (False, 0)
 
 
 def test_scales_to_1000_accounts_reads_instant_concurrency_bounded(monkeypatch, tmp_path):
@@ -158,7 +263,7 @@ def test_scales_to_1000_accounts_reads_instant_concurrency_bounded(monkeypatch, 
         time.sleep(0.002)
         with lock:
             live["n"] -= 1
-        return [{"orderId": label, "account": label}]
+        return [{"orderId": label, "account": label}], OK_META
 
     monkeypatch.setattr(service, "fetch_account_orders", fake_fetch)
 

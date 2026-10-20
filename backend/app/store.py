@@ -10,10 +10,17 @@ from __future__ import annotations
 
 import json
 import re
+import threading
 from datetime import datetime, timezone
 
 from . import storage
 from .errors import config_error
+
+# Serializes every read-modify-write mutation. API handlers run on a threadpool, so two requests
+# (two files dropped together, or parallel bulk-remove chunks) could otherwise interleave: the
+# file backend would lose one of the writes, and the cookie-dedup check-then-save could admit a
+# duplicate. The backend is one process (a single uvicorn worker), so a process-level lock covers it.
+_lock = threading.Lock()
 
 
 def _now_iso() -> str:
@@ -112,12 +119,13 @@ def add_account(label: str, cookie_input: str) -> list[dict]:
     no-op, so a mistaken re-add can't create a second copy of one account."""
     backend = storage.get_backend()
     rec = _record(label, cookie_input)
-    existing = backend.load_all()
     sig = _cookie_sig(rec["items"])
-    if any(a.get("id") != rec["id"] and _cookie_sig(a.get("items", [])) == sig for a in existing):
-        return _meta(existing)
-    backend.save_many([rec])
-    return _meta(backend.load_all())
+    with _lock:
+        existing = backend.load_all()
+        if any(a.get("id") != rec["id"] and _cookie_sig(a.get("items", [])) == sig for a in existing):
+            return _meta(existing)
+        backend.save_many([rec])
+        return _meta(backend.load_all())
 
 
 # ── Bulk import ──────────────────────────────────────────────────────────────
@@ -182,36 +190,59 @@ def import_accounts(default_label: str, content: str) -> tuple[int, list[dict]]:
     """Parse a blob into one or many accounts, persist them, and return (imported, metadata).
 
     Same-label entries across separate imports upsert (re-dropping a file updates it); genuine
-    duplicate labels *within one blob* are suffixed (-2, -3, …) so none is silently overwritten.
-    Accounts whose cookies are identical to one already stored (or to an earlier entry in the same
-    blob) under a different label are duplicates and are skipped — only the first copy is kept.
+    duplicate labels *within one blob* are suffixed (-2, -3, …) on both id and label so none is
+    silently overwritten and each stays distinguishable by label. The suffix depends only on the
+    blob, so re-dropping the same file updates "x-2" in place instead of minting "x-3".
+    Accounts whose cookies are identical to one already stored under a different label, or to an
+    earlier entry in the same blob, are duplicates and are skipped — only the first copy is kept.
     """
     entries = parse_import(content, default_label)
+    # Normalize every cookie before taking the lock: a bad entry fails the whole import up front.
+    candidates = [_record(entry["label"], entry["cookie"]) for entry in entries]
     backend = storage.get_backend()
-    existing = backend.load_all()
-    taken = {a["id"] for a in existing if a.get("id")}
-    sigs: dict[tuple, str] = {_cookie_sig(a.get("items", [])): a["id"] for a in existing}
-    records: list[dict] = []
-    batch_ids: set[str] = set()
-    for entry in entries:
-        rec = _record(entry["label"], entry["cookie"])
-        sig = _cookie_sig(rec["items"])
-        dup_id = sigs.get(sig)
-        if dup_id is not None and dup_id != rec["id"]:
-            continue  # same cookies already held under another account — skip the duplicate
-        if rec["id"] in batch_ids:
-            rec["id"] = _unique_id(rec["id"], batch_ids | taken)
-        batch_ids.add(rec["id"])
-        sigs[sig] = rec["id"]
-        records.append(rec)
-    backend.save_many(records)
-    return len(records), _meta(backend.load_all())
+    with _lock:
+        existing = backend.load_all()
+        sigs: dict[tuple, str] = {_cookie_sig(a.get("items", [])): a["id"] for a in existing}
+        records: list[dict] = []
+        batch_ids: set[str] = set()
+        batch_sigs: set[tuple] = set()
+        for rec in candidates:
+            sig = _cookie_sig(rec["items"])
+            if sig in batch_sigs:
+                continue  # the same cookies appeared earlier in this blob — keep the first copy
+            if rec["id"] in batch_ids:
+                base = rec["id"]
+                rec["id"] = _unique_id(base, batch_ids)
+                # Same suffix on the label (X -> X-2): the account filter and the CSV "Account"
+                # column key on the label, so two rows both labelled "X" would be indistinguishable.
+                rec["label"] += rec["id"][len(base):]
+            dup_id = sigs.get(sig)
+            if dup_id is not None and dup_id != rec["id"]:
+                continue  # same cookies already held under another account — skip the duplicate
+            batch_ids.add(rec["id"])
+            batch_sigs.add(sig)
+            sigs[sig] = rec["id"]
+            records.append(rec)
+        backend.save_many(records)
+        return len(records), _meta(backend.load_all())
 
 
 def remove_account(account_id: str) -> list[dict]:
     backend = storage.get_backend()
-    backend.delete(account_id)
-    return _meta(backend.load_all())
+    with _lock:
+        backend.delete(account_id)
+        return _meta(backend.load_all())
+
+
+def remove_accounts(ids: list[str]) -> list[dict]:
+    """Remove several accounts with one backend delete and one reload. Removing them one request
+    at a time rescanned all of storage per id (a GET per object on MinIO), so a bulk remove was
+    quadratic in the account count."""
+    backend = storage.get_backend()
+    with _lock:
+        if ids:
+            backend.delete_many(ids)
+        return _meta(backend.load_all())
 
 
 def set_active(account_ids: list[str], active: bool) -> list[dict]:
@@ -219,18 +250,20 @@ def set_active(account_ids: list[str], active: bool) -> list[dict]:
     from get_active_accounts(), so the poller drops them from its roster until reactivated."""
     backend = storage.get_backend()
     ids = set(account_ids)
-    changed = []
-    for a in backend.load_all():
-        if a.get("id") in ids and a.get("active", True) != active:
-            a["active"] = active
-            changed.append(a)
-    if changed:
-        backend.save_many(changed)
-    return _meta(backend.load_all())
+    with _lock:
+        changed = []
+        for a in backend.load_all():
+            if a.get("id") in ids and a.get("active", True) != active:
+                a["active"] = active
+                changed.append(a)
+        if changed:
+            backend.save_many(changed)
+        return _meta(backend.load_all())
 
 
 def clear_all() -> list[dict]:
-    storage.get_backend().clear()
+    with _lock:
+        storage.get_backend().clear()
     return []
 
 

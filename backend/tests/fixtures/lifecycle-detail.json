@@ -1,0 +1,31 @@
+{
+  "__NOTE__": "Synthetic, PII-free order-detail page for OD900000000000000001. Shape from live /api/4/page/fetch captures (2026-10-19): ONE response carries every unit's timeline under ssResponse.orderView.units; values fabricated.",
+  "RESPONSE": {
+    "slots": [
+      {"widget": {"data": {"shipmentDetails": {"address": {"addressLine1": "1 Test Street", "city": "Testpur", "pinCode": "560001", "phoneNumber": "9000000000"}}}}},
+      {"widget": {"data": {"ssResponse": {"orderView": {"units": {
+        "U1001": {"orderUnitProgressStepsV1": {"unitProgressSteps": [
+          {"groupName": "ORDER_RECEIVED", "stepStatus": "DONE", "date": 1792000000000},
+          {"groupName": "DELIVERY", "stepStatus": "DONE", "date": 1792090000000}
+        ]}},
+        "U1002": {"orderUnitProgressStepsV1": {"unitProgressSteps": [
+          {"groupName": "ORDER_RECEIVED", "stepStatus": "DONE", "date": 1792000000000},
+          {"groupName": "OUT_FOR_DELIVERY", "stepStatus": "DONE", "date": 1792140000000},
+          {"groupName": "CANCEL", "stepStatus": "DONE", "date": 1792150000000},
+          {"groupName": "REFUND", "stepStatus": "DONE", "date": 1792700000000}
+        ]}},
+        "U2002": {"orderUnitProgressStepsV1": {"unitProgressSteps": [
+          {"groupName": "ORDER_RECEIVED", "stepStatus": "DONE", "date": 1792150001000},
+          {"groupName": "UNDEL", "stepStatus": "DONE", "date": 1792290000000},
+          {"groupName": "CANCEL", "stepStatus": "DONE", "date": 1792300000000},
+          {"groupName": "DELIVERY", "stepStatus": "INACTIVE", "date": 1792800000000},
+          {"groupName": "REFUND", "stepStatus": "DONE", "date": 1792700000000}
+        ]}},
+        "U1003": {"orderUnitProgressStepsV1": {"unitProgressSteps": [
+          {"groupName": "CANCEL", "stepStatus": "DONE", "date": 1792000500000}
+        ]}}
+      }}}}}},
+      {"widget": {"data": {"contentList": [{"contents": [{"templateReplacements": {"otpValue": "4821"}}]}]}}}
+    ]
+  }
+}

@@ -22,11 +22,27 @@ _DEFAULT_UA = (
 )
 
 
+_DEFAULT_CORS_ORIGINS = (
+    "http://localhost:3100,http://127.0.0.1:3100,"  # Docker UI
+    "http://localhost:3000,http://127.0.0.1:3000"   # `npm run dev`
+)
+
+
 def _int(name: str, default: int) -> int:
     try:
         return int(os.environ.get(name, "") or default)
     except ValueError:
         return default
+
+
+def _origins(name: str, default: str) -> list[str]:
+    """Comma-separated origins; unset/blank falls back to ``default``. Trailing slashes are dropped
+    because browsers send ``Origin`` as scheme://host[:port], so "http://x/" would never match."""
+
+    def split(raw: str) -> list[str]:
+        return [o for o in (s.strip().rstrip("/") for s in raw.split(",")) if o]
+
+    return split(os.environ.get(name, "")) or split(default)
 
 
 class Config:
@@ -35,11 +51,22 @@ class Config:
     session_store_path: str = os.environ.get("SESSION_STORE_PATH", ".flipkart-session.json")
     # When set, /api/accounts mutations require the header x-admin-token.
     admin_token: str = os.environ.get("ADMIN_TOKEN", "")
+    # Browser origins allowed to call the API (CORS_ORIGINS, comma-separated). The API serves
+    # customer PII and live OTPs, so only the local UI may read it from a browser; any other page
+    # the user has open gets no CORS grant.
+    cors_origins: list[str] = _origins("CORS_ORIGINS", _DEFAULT_CORS_ORIGINS)
     # Paginate My Orders (7/page, most recent first). Stops early when Flipkart reports no more
     # orders; this is a safety cap (100 pages ~= 700 orders). Raise it if you have more history.
     max_pages: int = max(1, _int("FLIPKART_MAX_PAGES", 100))
     # Fetch each order's detail page (address + live OTP) for at most this many recent orders.
     max_details: int = max(0, _int("FLIPKART_MAX_DETAILS", 40))
+    # Lifecycle detail lookups (cancel / replacement / refund dates) only target units in orders
+    # placed within this many days (by orderMetaData.orderDate), so old history doesn't cost a
+    # detail call on every refresh.
+    history_days: int = max(0, _int("FLIPKART_HISTORY_DAYS", 30))
+    # Safety cap on those history-tier detail calls per account. They run after every active (OTP)
+    # unit and before the address-only ones; ACCOUNT_DEADLINE_S still bounds the total. 0 = off.
+    max_history_details: int = max(0, _int("FLIPKART_MAX_HISTORY_DETAILS", 150))
     # Per-request timeout, seconds (env is milliseconds to match the frontend convention).
     timeout: float = _int("FLIPKART_TIMEOUT_MS", 20000) / 1000.0
     # Flipkart requires its custom x-user-agent (FKUA) header on the internal APIs.

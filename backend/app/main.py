@@ -6,14 +6,15 @@ from contextlib import asynccontextmanager
 import json
 from datetime import datetime, timezone
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse
+from starlette.concurrency import run_in_threadpool
 
 from . import poller, service, store
 from .config import config
-from .errors import AppError, config_error, to_error_response
+from .errors import config_error, to_error_response, unauthorized
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -27,11 +28,13 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Flipkart Delivery Tracker API", lifespan=lifespan)
 
-# Frontend normally reaches us via the Next.js proxy (same-origin), but allow direct
-# browser calls too (e.g. during development) without CORS friction.
+# The browser calls the API directly from the local UI (NEXT_PUBLIC_BACKEND_URL), so that origin
+# needs a CORS grant. Responses carry customer PII and live OTPs, so ONLY the configured local UI
+# origins (CORS_ORIGINS) get one: a page from any other site the user has open can't read them.
+# No credentials: the API uses no cookies (admin auth is the x-admin-token header).
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=config.cors_origins,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -45,10 +48,22 @@ def _admin_denied(request: Request) -> JSONResponse | None:
         return None
     if request.headers.get("x-admin-token") == config.admin_token:
         return None
-    return JSONResponse(
-        {"ok": False, "error": {"code": "AUTH_EXPIRED", "message": "Admin token required."}},
-        status_code=401,
-    )
+    # UNAUTHORIZED, not AUTH_EXPIRED: AUTH_EXPIRED means a Flipkart session expired, which would
+    # send the user off to replace a cookie that is fine.
+    body, status = to_error_response(unauthorized("Admin token required."))
+    return JSONResponse(body, status_code=status)
+
+
+def _json_required(request: Request) -> JSONResponse | None:
+    """Reject state-changing requests whose body isn't declared JSON. A page from any other site can
+    send a `text/plain` POST to localhost WITHOUT a CORS preflight (a "simple" request), so the
+    origin allow-list alone wouldn't stop it from adding accounts. Requiring application/json forces
+    the browser to preflight, which CORS_ORIGINS then refuses for foreign origins."""
+    ctype = request.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+    if ctype == "application/json":
+        return None
+    body, status = to_error_response(config_error("Content-Type must be application/json."))
+    return JSONResponse(body, status_code=status)
 
 
 @app.get("/api/health")
@@ -81,7 +96,7 @@ def get_accounts() -> dict:
 
 @app.post("/api/accounts", response_model=None)
 async def post_account(request: Request) -> JSONResponse | dict:
-    denied = _admin_denied(request)
+    denied = _admin_denied(request) or _json_required(request)
     if denied:
         return denied
     try:
@@ -94,7 +109,9 @@ async def post_account(request: Request) -> JSONResponse | dict:
         b, s = to_error_response(config_error("Request body must include a non-empty 'cookie' string."))
         return JSONResponse(b, status_code=s)
     try:
-        accounts = store.add_account(label if isinstance(label, str) else "", cookie)
+        # Store calls do blocking file/S3 I/O; run them off the event loop so one slow MinIO
+        # scan doesn't stall every other request (including the /api/orders poll).
+        accounts = await run_in_threadpool(store.add_account, label if isinstance(label, str) else "", cookie)
         poller.instance.wake()
         return {"accounts": accounts}
     except Exception as err:  # noqa: BLE001
@@ -108,7 +125,7 @@ _MAX_IMPORT_BYTES = 2 * 1024 * 1024  # 2 MB cap on an uploaded cookie blob (uplo
 @app.post("/api/accounts/import", response_model=None)
 async def import_accounts(request: Request) -> JSONResponse | dict:
     """Import one blob into one or many accounts (.json/.txt, single or multi-account)."""
-    denied = _admin_denied(request)
+    denied = _admin_denied(request) or _json_required(request)
     if denied:
         return denied
     raw = await request.body()
@@ -125,7 +142,9 @@ async def import_accounts(request: Request) -> JSONResponse | dict:
         b, s = to_error_response(config_error("Request body must include a non-empty 'content' string."))
         return JSONResponse(b, status_code=s)
     try:
-        imported, accounts = store.import_accounts(label if isinstance(label, str) else "", content)
+        imported, accounts = await run_in_threadpool(
+            store.import_accounts, label if isinstance(label, str) else "", content
+        )
         poller.instance.wake()
         return {"accounts": accounts, "imported": imported}
     except Exception as err:  # noqa: BLE001
@@ -134,19 +153,31 @@ async def import_accounts(request: Request) -> JSONResponse | dict:
 
 
 @app.delete("/api/accounts", response_model=None)
-def delete_account(request: Request, id: str | None = None) -> JSONResponse | dict:
+def delete_account(request: Request, id: list[str] | None = Query(None)) -> JSONResponse | dict:
+    """Remove accounts: ``?id=a`` one, ``?id=a&id=b…`` several in one storage pass, no ``id``
+    at all clears every account. (A sync handler, so FastAPI already runs it off the event loop.)
+    An ``id`` that is present but empty (``?id=``) matches nothing; it never means "clear all"."""
     denied = _admin_denied(request)
     if denied:
         return denied
-    accounts = store.remove_account(id) if id else store.clear_all()
-    poller.instance.wake()
-    return {"accounts": accounts}
+    try:
+        if id is None:
+            accounts = store.clear_all()
+        elif len(id) == 1:
+            accounts = store.remove_account(id[0])
+        else:
+            accounts = store.remove_accounts(id)
+        poller.instance.wake()
+        return {"accounts": accounts}
+    except Exception as err:  # noqa: BLE001
+        b, s = to_error_response(err)
+        return JSONResponse(b, status_code=s)
 
 
 @app.patch("/api/accounts", response_model=None)
 async def patch_accounts(request: Request) -> JSONResponse | dict:
     """Activate/deactivate a set of accounts. Body: {ids: string[], active: bool}."""
-    denied = _admin_denied(request)
+    denied = _admin_denied(request) or _json_required(request)
     if denied:
         return denied
     try:
@@ -161,6 +192,10 @@ async def patch_accounts(request: Request) -> JSONResponse | dict:
     if not isinstance(active, bool):
         b, s = to_error_response(config_error("Request body must include a boolean 'active'."))
         return JSONResponse(b, status_code=s)
-    accounts = store.set_active(ids, active)
-    poller.instance.wake()
-    return {"accounts": accounts}
+    try:
+        accounts = await run_in_threadpool(store.set_active, ids, active)
+        poller.instance.wake()
+        return {"accounts": accounts}
+    except Exception as err:  # noqa: BLE001
+        b, s = to_error_response(err)
+        return JSONResponse(b, status_code=s)

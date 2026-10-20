@@ -1,3 +1,22 @@
+import type { ErrorCode } from "./types";
+
+// Operator-facing text for internal error codes, so the UI never shows raw enum values. Lower-case
+// so it reads naturally mid-sentence ("Mom (session expired)"); capitalise it for a heading.
+export const ERROR_TEXT: Record<ErrorCode, string> = {
+  AUTH_EXPIRED: "session expired",
+  UNAUTHORIZED: "admin token required",
+  UPSTREAM_ERROR: "couldn't reach Flipkart",
+  PARSE_ERROR: "unexpected response",
+  CONFIG_ERROR: "not configured",
+  UNKNOWN: "unknown error",
+};
+
+// ERROR_TEXT lookup that degrades to "unknown error" for a missing code, or one a newer backend
+// sends that this build doesn't know yet, instead of rendering "undefined".
+export function errorText(code: ErrorCode | undefined): string {
+  return (code && ERROR_TEXT[code]) || ERROR_TEXT.UNKNOWN;
+}
+
 // Shared status "tone" recipes: one source of truth for chip + dot colors (light AND dark),
 // so StatusBadge (order status) and AccountsPanel (account health) can't drift apart.
 export type Tone = "ok" | "pending" | "info" | "error" | "neutral";

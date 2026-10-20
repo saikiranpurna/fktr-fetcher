@@ -51,7 +51,10 @@ export function applyOrderFilters(
     }
 
     if (search) {
-      const hay = `${o.orderId} ${o.trackingId} ${o.phone} ${o.itemName} ${o.customerName} ${o.account}`.toLowerCase();
+      // replacementOf is the ORIGINAL shipment's tracking id, so searching an original tracking id
+      // also finds the replacement shipment(s) raised for it.
+      const hay =
+        `${o.orderId} ${o.trackingId} ${o.replacementOf ?? ""} ${o.phone} ${o.itemName} ${o.customerName} ${o.account}`.toLowerCase();
       if (!hay.includes(search)) return false;
     }
     return true;

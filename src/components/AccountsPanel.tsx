@@ -1,12 +1,13 @@
 "use client";
 
-import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { API_BASE } from "@/lib/api";
 import type { AccountMeta, AccountResult } from "@/lib/types";
 import { TONE_CHIP, TONE_DOT, type Tone } from "@/lib/ui";
 
 const ADMIN_TOKEN_KEY = "fkrt.adminToken";
 const PAGE = 50; // window the account list so 1000+ accounts don't render at once
+const DELETE_CHUNK = 100; // ids per bulk DELETE (?id=a&id=b…): far fewer requests, URLs stay short
 
 type HealthKey = "ok" | "pending" | "queued" | "expired" | "error" | "paused";
 type Health = { key: HealthKey; tone: Tone; label: string; rank: number; hint?: string };
@@ -29,6 +30,28 @@ const PAUSED_HEALTH: Health = {
   rank: 2,
   hint: "Paused — cookies kept, not refreshed.",
 };
+
+// Data-quality caveats from the account's last fetch: it worked, but the rows may be incomplete.
+// Shown as amber hints under the account, independent of the health chip.
+function dataHints(status: AccountResult | undefined): { key: string; text: string; title: string }[] {
+  const hints: { key: string; text: string; title: string }[] = [];
+  if (status?.partial)
+    hints.push({
+      key: "partial",
+      text: "partial history",
+      title:
+        "Order history is incomplete (a later page failed, the per-account time budget ran out, or the page cap was hit), so older orders may be missing.",
+    });
+  const failed = status?.detailFailed ?? 0;
+  if (failed > 0)
+    hints.push({
+      key: "details",
+      text: `${failed} detail${failed === 1 ? "" : "s"} failed`,
+      title:
+        "Some order-detail lookups failed: address, mobile, OTP, cancellation and replacement dates may be missing for those shipments.",
+    });
+  return hints;
+}
 
 const PILLS: { key: HealthKey; tone: Tone; label: string }[] = [
   { key: "expired", tone: "error", label: "Session expired" },
@@ -372,7 +395,10 @@ export function AccountsPanel({
     }
   }
 
-  async function removeSelected(ids: string[]) {
+  async function removeSelected(selectedIds: string[]) {
+    // DELETE /api/accounts with NO id clears EVERY account, so a bulk request must never go out
+    // without ids: drop blanks, bail on an empty selection, and never build an empty chunk.
+    const ids = selectedIds.filter(Boolean);
     if (ids.length === 0) return;
     setBusy(true);
     setBusyLabel("Removing…");
@@ -380,21 +406,30 @@ export function AccountsPanel({
     setFileMsg(null);
     persistAdminToken();
     const failures: string[] = [];
-    for (const id of ids) {
+    let failed = 0;
+    // One request per chunk of ids (repeated ?id= params) instead of one per id. Chunks run in
+    // sequence; a failed chunk counts all of its ids as not removed.
+    for (let i = 0; i < ids.length; i += DELETE_CHUNK) {
+      const chunk = ids.slice(i, i + DELETE_CHUNK);
+      const params = new URLSearchParams();
+      for (const id of chunk) params.append("id", id);
+      const notRemoved = `${chunk.length} account${chunk.length === 1 ? "" : "s"} not removed`;
       try {
-        const res = await fetch(`${API_BASE}/api/accounts?id=${encodeURIComponent(id)}`, {
+        const res = await fetch(`${API_BASE}/api/accounts?${params}`, {
           method: "DELETE",
           headers: headers(),
         });
         if (!res.ok) {
           const body = await res.json().catch(() => null);
-          failures.push(body?.error?.message ?? `Couldn't remove ${id}.`);
+          failures.push(`${body?.error?.message ?? "Couldn't remove those accounts."} (${notRemoved})`);
+          failed += chunk.length;
         }
       } catch (err) {
-        failures.push((err as Error).message);
+        failures.push(`${(err as Error).message || "Network error while removing accounts."} (${notRemoved})`);
+        failed += chunk.length;
       }
     }
-    const removed = ids.length - failures.length;
+    const removed = ids.length - failed;
     setBusy(false);
     setBusyLabel(null);
     requestAnimationFrame(() => listRef.current?.focus());
@@ -590,6 +625,7 @@ export function AccountsPanel({
           shown.map((a) => {
             const h = hOf(a);
             const st = statusById.get(a.id);
+            const hints = dataHints(st);
             const isSelected = selected.has(a.id);
             return (
               <li
@@ -628,6 +664,16 @@ export function AccountsPanel({
                   </span>
                   {st && !st.ok && !st.pending && st.error?.message && (
                     <p className="mt-0.5 text-[11px] text-red-600 dark:text-red-400">{st.error.message}</p>
+                  )}
+                  {hints.length > 0 && (
+                    <p className="mt-0.5 text-[11px] text-amber-700 dark:text-amber-400">
+                      {hints.map((hint, i) => (
+                        <Fragment key={hint.key}>
+                          {i > 0 && " · "}
+                          <span title={hint.title}>{hint.text}</span>
+                        </Fragment>
+                      ))}
+                    </p>
                   )}
                 </div>
                 {confirmingId === a.id ? (

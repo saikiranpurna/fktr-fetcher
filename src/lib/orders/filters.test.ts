@@ -82,6 +82,19 @@ describe("applyOrderFilters", () => {
     expect(combo.map((o) => o.orderId)).toEqual(["A"]);
   });
 
+  it("search by an original tracking id also finds its replacement shipment", () => {
+    const local: Order[] = [
+      order({ orderId: "ORIG", trackingId: "FMPP1000000001" }),
+      order({ orderId: "REPL", trackingId: "FMPP2000000002", replacementOf: "FMPP1000000001" }),
+      order({ orderId: "OTHER", trackingId: "FMPP3000000003", replacementOf: "" }),
+    ];
+    const hits = applyOrderFilters(local, { ...DEFAULT_FILTERS, search: "fmpp1000000001" }, NOW, TZ);
+    expect(hits.map((o) => o.orderId)).toEqual(["ORIG", "REPL"]);
+    // The replacement's own tracking id still matches only the replacement.
+    const own = applyOrderFilters(local, { ...DEFAULT_FILTERS, search: "FMPP2000000002" }, NOW, TZ);
+    expect(own.map((o) => o.orderId)).toEqual(["REPL"]);
+  });
+
   it("filters by multiple accounts (union of the selected set)", () => {
     const local: Order[] = [
       order({ orderId: "N", account: "North" }),
