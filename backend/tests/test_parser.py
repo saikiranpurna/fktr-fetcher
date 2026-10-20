@@ -127,6 +127,71 @@ def test_price_paid_uses_whichever_field_reconciles_with_the_order_total():
     assert rows["FMPP7000000001"]["pricePaid"] == 335.0  # ...the original was paid
 
 
+def _order_with(units: dict[str, dict], titles: dict[str, str]) -> dict:
+    return {
+        "orderMetaData": {"orderId": "OD900000000000000077", "orderDate": 1792000000000},
+        "productDataBag": {lid: {"productBasicData": {"title": t}} for lid, t in titles.items()},
+        "units": units,
+    }
+
+
+def _unit(kind: str, listing: str, tracking: str = "", amount: float = 0.0) -> dict:
+    return {
+        "metaData": {"type": kind, "listingId": listing, "trackingId": tracking, "moRedesignHeading": "Delivered on Oct 02"},
+        "moneyDataBag": {"amount": amount},
+    }
+
+
+def test_addons_without_vas_details_are_skipped_by_their_digital_service_type():
+    # Live 2026-10-20: a bulk order's trust-shield units were metaData.type "digital_service" with NO
+    # vasItemDetails, so each surfaced as a ₹0 row next to the product unit it rode on.
+    shield = _unit("digital_service", "LSTSHIELD")
+    order = _order_with(
+        {
+            "U1": _unit("physical", "LSTPROD", "FMPP9100000001", 2286.0),
+            "U2": shield,
+            "U3": _unit("physical", "LSTPROD", "FMPP9100000002", 2286.0),
+            "U4": _unit("digital_service", "LSTSHIELD"),
+        },
+        {"LSTPROD": "Bluetooth Speaker", "LSTSHIELD": "Flipkart Trust Shield"},
+    )
+    rows = parser.parse_orders([order], {})
+    assert [(r["trackingId"], r["itemName"], r["pricePaid"]) for r in rows] == [
+        ("FMPP9100000001", "Bluetooth Speaker", 2286.0),
+        ("FMPP9100000002", "Bluetooth Speaker", 2286.0),
+    ]
+    assert parser.is_addon(shield) and parser.is_addon({"vasItemDetails": {"type": "TRUST_SHIELD"}})
+    assert not parser.is_addon(_unit("physical", "LSTPROD")) and not parser.is_addon({"metaData": {}})
+
+
+def test_a_paid_digital_item_keeps_its_row_and_price():
+    # Only a FREE digital_service unit is an add-on: one that charged something is a real purchase.
+    plan = _unit("digital_service", "LSTPLAN", amount=799.0)
+    assert not parser.is_addon(plan)
+    order = _order_with(
+        {"U1": _unit("physical", "LSTPROD", "FMPP9200000001", 15999.0), "U2": plan},
+        {"LSTPROD": "Phone", "LSTPLAN": "Extended Warranty"},
+    )
+    assert [(r["itemName"], r["pricePaid"]) for r in parser.parse_orders([order], {})] == [
+        ("Phone", 15999.0),
+        ("Extended Warranty", 799.0),
+    ]
+
+
+def test_rows_carry_their_unit_id_and_product_fsn():
+    # An invoice download sends the unit back; the order's bundle names each tax invoice's FSN.
+    unit = _unit("physical", "LSTPROD", "FMPP9300000001", 999.0)
+    unit["metaData"]["fsn"] = "SPKFSN00000001"
+    [row] = parser.parse_orders([_order_with({"U1": unit}, {"LSTPROD": "Speaker"})], {})
+    assert (row["unitId"], row["fsn"]) == ("U1", "SPKFSN00000001")
+    assert _rows()["FMPP1000000001"]["unitId"] and "fsn" in _rows()["FMPP1000000001"]
+
+
+def test_an_order_made_only_of_add_ons_still_shows_them():
+    rows = parser.parse_orders([_order_with({"U1": _unit("digital_service", "LSTV")}, {"LSTV": "Hotel voucher"})], {})
+    assert [r["itemName"] for r in rows] == ["Hotel voucher"]
+
+
 def test_expected_and_delivered_dates_come_from_the_promise_data():
     row = _rows()["FMPP1000000001"]
     assert row["expectedDateIso"] == _iso(1792100000000)

@@ -35,7 +35,9 @@ status / date / account / search and export to **CSV / Excel**.
 
 ## 2. Quick start (Docker)
 
-From the project folder (the one containing `docker-compose.yml`):
+From the project folder (the one containing `docker-compose.yml`). In PowerShell, put a path that
+has spaces in quotes, e.g. `cd "C:\Users\Your Name\Desktop\fktr-fetcher-main"`; without them `cd`
+fails with *A positional parameter cannot be found*.
 
 ```bash
 docker compose up --build -d
@@ -51,8 +53,11 @@ docker compose up --build -d
 Check it's running:
 
 ```bash
-docker compose ps          # "minio", "backend" and "frontend" should be Up, on 127.0.0.1 ports
+docker compose ps -a       # "minio", "backend" and "frontend" should be Up, on 127.0.0.1 ports
 ```
+
+`minio-perms` shows **Exited (0)**: that's expected. It's a one-shot step that makes MinIO's storage
+volume writable for MinIO before MinIO starts.
 
 Stop it:
 
@@ -120,20 +125,42 @@ field under **Add accounts** first.
 - **Filters:**
   - Status pills: **Out for Delivery / Arriving / Delivered / Cancelled / Other** (click to toggle;
     counts in brackets).
-  - **Date:** All dates / Today / Tomorrow / Next 7 days / Last 7 days, based on each row's
-    **Activity Date**. For cancelled, replaced or refunded shipments that is the latest of those
-    events, so **Today** and **Last 7 days** include recent cancellations and refunds. Otherwise it
-    is the delivered date (delivered shipments) or the expected date, falling back to the order date.
+  - **Date:** All dates / Today / Tomorrow / Next 7 days / Last 7 days / **Custom range** (From and
+    To dates, both included; leave either blank), based on each row's **Activity Date**. For
+    cancelled, replaced or refunded shipments that is the latest of those events, so **Today** and
+    **Last 7 days** include recent cancellations and refunds. Otherwise it is the delivered date
+    (delivered shipments) or the expected date, falling back to the order date.
   - **Account** picker (when you have more than one account).
   - **Search:** order ID, tracking ID (FMPP…), mobile number, item, customer, account label, or
     **Replacement Of**, so searching an original tracking ID also finds its replacement shipment.
-- **Order cards** show the paid amount, "Expected …" or "Delivered …", and a short history
+  - **Refund:** any / completed / in progress / no refund.
+  - **Price ₹** min and max (both included). While either is set, rows with no known price are hidden.
+  - **Has OTP / Replacement / Has GSTIN / Details failed:** a row must match every box you tick.
+- **Order cards** show the price, "Expected …" or "Delivered …", and a short history
   (Cancelled, Replacement requested / delivered / cancelled, Refund ₹… initiated / completed) when
   there is one. A replacement shipment's card is tagged **Replacement of &lt;tracking ID&gt;**.
   **Details unavailable** means that shipment's detail lookup failed.
+  - The price reads **Paid ₹…**, or says why nothing was paid: **Not charged (order not placed)**
+    (the payment never went through), **Free replacement**, or **Free**.
+  - Free add-ons that ride on a product (e.g. **Flipkart Trust Shield**, voucher freebies) aren't
+    shipments, so they get no card or CSV row.
+  - Delivered cards have **Download invoice**: that shipment's **tax invoice**, one PDF
+    (`invoice-<order ID>-<tracking ID>.pdf`). Flipkart only hands out an order's invoices as one
+    bundle (tax invoices, fee invoices and transport documents for every shipment); the app picks out
+    this shipment's tax invoice by its product (FSN). When an order has several **identical** units,
+    Flipkart's invoices don't say which shipment each one is for, so they are paired in a fixed order:
+    every card always gets the same invoice and no two cards share one, but the IMEI / serial printed
+    on it may be another unit's of that order.
 - **Download CSV** exports exactly what's currently shown (it respects your filters). A tracking ID
   that appears twice (e.g. the same account added twice) is exported once. Opens cleanly in Excel
   (UTF‑8 BOM).
+- **Invoices (ZIP)** saves the tax invoices of **exactly the delivered cards currently shown** (same
+  filters as the list and the CSV; the button shows how many): one ZIP with a folder per order and a
+  PDF per shipment (`<order ID>/<tracking ID>.pdf`). Cards without one (not shipped yet, or Flipkart
+  hasn't issued it) are listed in the ZIP's `missing.txt`. Each order's bundle is fetched once, so a
+  ZIP covers the cards of up to `INVOICE_ZIP_MAX` (100) orders; with more, each click saves the next
+  batch (the note shows which orders). An order shared between accounts is fetched through whichever
+  of them still works (one may be paused or have an expired session).
 
 ### CSV columns
 
@@ -150,7 +177,7 @@ columns come after them, so sheets built on the old layout keep working.
 | Status | Out for Delivery / Arriving / Delivered / Cancelled / Other |
 | Activity Date | The date the filters use (see above) |
 | GSTIN | The order's GST number from its "GST details" section; blank when it has none |
-| Price Paid | What the customer paid for this shipment's item, after discounts (₹, plain number; `0` when nothing was charged, e.g. a free exchange) |
+| Price Paid | What the customer paid for this shipment's item, after discounts (₹, plain number; `0` when nothing was charged, e.g. an order that was never placed or a free exchange) |
 | Expected Date | Promised delivery date |
 | Delivered Date | Actual delivery date |
 | Cancelled Date | When the shipment was cancelled |
@@ -192,6 +219,8 @@ root (Docker Compose reads it automatically), then edit:
 | `FLIPKART_HISTORY_DAYS` | `30` | Orders with a cancelled / replaced / refunded shipment get their lifecycle lookup only if placed in the last N days |
 | `FLIPKART_MAX_HISTORY_DETAILS` | `150` | Safety cap on those lookups (one per order) per account per fetch (`0` turns them off) |
 | `FLIPKART_TIMEOUT_MS` | `20000` | Per-request timeout |
+| `INVOICE_ZIP_MAX` | `100` | Most orders whose cards one **Invoices (ZIP)** download covers (each order's invoice bundle is one Flipkart request, several MB for a bulk order); with more, each click saves the next batch |
+| `FLIPKART_INVOICE_URL` | Flipkart's endpoint | Where an order's invoices are fetched (`<url><orderId>`). Change it only if Flipkart moves the endpoint |
 | `ADMIN_TOKEN` | *(blank)* | If set, adding, pausing and removing accounts needs this token (enter it in the Accounts tab); a missing or wrong token is refused (`UNAUTHORIZED`). Viewing orders never needs it. Leave blank for normal local use |
 | `CORS_ORIGINS` | *(blank)* | Browser origins allowed to call the API, comma-separated. Blank = the local UI: `http://localhost:3100`, `http://127.0.0.1:3100`, plus `:3000` for `npm run dev`. Change it only if you move the UI to another port |
 | `MINIO_ROOT_USER` / `MINIO_ROOT_PASSWORD` | `minioadmin` | MinIO credentials (console login; the backend uses them too) |
@@ -222,6 +251,7 @@ docker compose up -d --build
 | Symptom | Fix |
 |---|---|
 | `docker compose` errors / "cannot connect" | Start **Docker Desktop** and wait until it's running |
+| `dependency failed to start: container …-minio-1 is unhealthy` | MinIO can't write its storage volume, usually one left by an earlier install (`docker compose logs minio` shows `file access denied`). Use the current `docker-compose.yml` (its `minio-perms` step fixes the volume), then run `docker compose down` and `docker compose up -d --build`. On a first install with no accounts yet you can instead start clean: `docker compose down -v`, then `docker compose up -d --build` |
 | App doesn't open on :3100 | Another app may use the port. In `docker-compose.yml` change the frontend's `"127.0.0.1:3100:3000"` to e.g. `"127.0.0.1:3200:3000"`, set `CORS_ORIGINS=http://localhost:3200,http://127.0.0.1:3200` in `.env`, then `docker compose up -d`. Keep the `127.0.0.1:` prefix |
 | Port 8000 is taken | Change the backend's `"127.0.0.1:8000:8000"` to e.g. `"127.0.0.1:8100:8000"` **and** the frontend's `NEXT_PUBLIC_BACKEND_URL` build arg to `http://localhost:8100`, then `docker compose up -d --build` (that URL is baked into the frontend at build time) |
 | Board is **empty** | Add an account (section 3). If you just added one, wait until it stops **Refreshing** and click **Refresh**. Still empty? Set **Date = All dates** and clear the status pills; you may simply have nothing out for delivery today |
@@ -229,8 +259,10 @@ docker compose up -d --build
 | “No Flipkart accounts” message | Drop at least one cookie file in the **Accounts** tab |
 | “Admin token required” | `ADMIN_TOKEN` is set: enter it in the **Admin token** field (Accounts tab → **Add accounts**) |
 | Orders or OTPs look out of date | **Refresh** only re-reads the backend's cache; each account is refetched from Flipkart every 30 min. Lower `REFRESH_INTERVAL_S` in `.env` for fresher data |
-| *partial history* / *N details failed* on an account | *partial history*: the order history was cut short (a later page failed, the per-account time budget `ACCOUNT_DEADLINE_S` ran out, or the `FLIPKART_MAX_PAGES` cap was hit). *N details failed*: that many order-detail requests failed. The next scheduled fetch tries again; the backend log shows Flipkart's reply |
+| *partial history* / *N details failed* on an account | *partial history*: the order history was cut short (a later page failed, the per-account time budget `ACCOUNT_DEADLINE_S` ran out, or the `FLIPKART_MAX_PAGES` cap was hit). The board keeps the older orders from earlier fetches that this one didn't reach, until a complete fetch. *N details failed*: that many order-detail requests failed. The next scheduled fetch tries again; the backend log shows Flipkart's reply |
 | Cancelled or replacement dates are empty | Check the row's **Details**: `skipped` = not looked up (order older than `FLIPKART_HISTORY_DAYS`, or over a cap), `failed` = the lookup errored, `ok` = there was no such event |
+| **Invoice not available yet** | Flipkart issues invoices once a unit ships, and until then answers "try again later" (it says the same on a temporary fault); or its bundle has no tax invoice for that shipment yet. Try again later |
+| Invoice download says **Not configured** | The card's account was paused or removed after the page loaded: **Refresh**, or reactivate the account in the Accounts tab |
 
 View logs if something looks wrong (failed Flipkart calls are logged with the HTTP status and the start
 of Flipkart's reply, never cookies):
@@ -254,7 +286,8 @@ Three services (see `docker-compose.yml`), all on one machine:
   one per out-for-delivery / arriving shipment (address, mobile, live OTP), then one per recent order
   with a cancelled / replaced / refunded shipment (cancellation and replacement dates), then one per
   other recent order (its address). Each order becomes one row per shipment. `GET /api/orders` only
-  serves the cache.
+  serves the cache. The invoice routes are the only ones that call Flipkart on request; they use
+  the account's cookies from the poller's in-memory roster.
 - **repo root** — **Next.js** frontend (UI only). The browser calls the backend directly at
   http://localhost:8000 (`NEXT_PUBLIC_BACKEND_URL`, baked in at build), which is why the UI's origin
   must be listed in `CORS_ORIGINS`.
@@ -267,19 +300,21 @@ Three services (see `docker-compose.yml`), all on one machine:
 
 | Method | Path | Notes |
 |---|---|---|
-| GET | `/api/orders` | `{ ok, orders[], accounts[], coverage, fetchedAt, timezone }`, served from the cache (never calls Flipkart). `accounts[]`: `{ id, label, ok, count, pending?, fetchedAt?, error?, partial, detailFailed }`, where `partial` = order history truncated and `detailFailed` = detail lookups that failed. `coverage`: poller progress (`total`, `ok`, `failed`, `pending`, `inFlight`, …) |
+| GET | `/api/orders` | `{ ok, orders[], accounts[], coverage, fetchedAt, timezone, invoiceZipMax }`, served from the cache (never calls Flipkart). `accounts[]`: `{ id, label, ok, count, pending?, fetchedAt?, error?, partial, detailFailed }`, where `partial` = order history truncated and `detailFailed` = detail lookups that failed. `coverage`: poller progress (`total`, `ok`, `failed`, `pending`, `inFlight`, …) |
 | GET | `/api/accounts` | `{ accounts[] }`, each `{ id, label, updatedAt, count, active }` (never cookie values) |
 | POST | `/api/accounts` | body `{ label, cookie }`: add one account, or update it if the label already exists |
 | POST | `/api/accounts/import` | body `{ label?, content }`: `content` is a raw `.json`/`.txt` blob (max 2 MB), single **or** multi-account. Returns `{ accounts, imported }` |
 | PATCH | `/api/accounts` | body `{ ids: string[], active: boolean }`: pause (`false`) or activate accounts |
 | DELETE | `/api/accounts?id=a&id=b` | Remove the listed accounts (repeat `id`; one is fine). **No `id` at all clears every account**; an empty `?id=` matches nothing |
 | GET | `/api/health` | `{ ok, accounts, poller }`: liveness, active-account count, poller progress |
+| GET | `/api/invoice?accountId=&orderId=&unitId=` | One card's tax invoice (`application/pdf`), picked out of the order's invoice bundle, which is fetched from Flipkart on request. Needs the header `X-Requested-With` (any value), which makes browsers preflight it so other websites can't trigger it |
+| POST | `/api/invoices/zip` | JSON body `{ orders: [{ orderId, accountIds, unitIds }] }` (the filtered cards, grouped by order): one ZIP with `<orderId>/<trackingId>.pdf` per card, plus `missing.txt` (order ID, shipment, error code, reason) for cards without one. At most `INVOICE_ZIP_MAX` orders. Each order's bundle is fetched once, through the first of its `accountIds` that can (one may be paused or have an expired session). `X-Invoice-Files` / `X-Invoice-Missing` give the counts. When nothing could be saved, the error comes back as JSON instead of a ZIP |
 
-`POST`, `PATCH` and `DELETE` need the header `x-admin-token` when `ADMIN_TOKEN` is set; a missing or
-wrong token gets **401** with error code `UNAUTHORIZED`. Errors look like
+`POST`, `PATCH` and `DELETE` on `/api/accounts` need the header `x-admin-token` when `ADMIN_TOKEN`
+is set; a missing or wrong token gets **401** with error code `UNAUTHORIZED`. Errors look like
 `{ ok: false, error: { code, message } }`, with codes `AUTH_EXPIRED` (401, a Flipkart session
-expired), `UNAUTHORIZED` (401), `UPSTREAM_ERROR` / `PARSE_ERROR` (502), `CONFIG_ERROR` (400) and
-`UNKNOWN` (500).
+expired), `UNAUTHORIZED` (401), `UPSTREAM_ERROR` / `PARSE_ERROR` (502), `CONFIG_ERROR` (400),
+`INVOICE_UNAVAILABLE` (404, Flipkart has no invoice for the order yet) and `UNKNOWN` (500).
 
 **Order rows** (`orders[]`, one per shipment; the contract is `Order` in `src/lib/types.ts`):
 `account`, `orderId`, `trackingId`, `customerName`, `itemName`, `deliveryAddress`, `phone`, `otp`,
@@ -289,7 +324,9 @@ expired), `UNAUTHORIZED` (401), `UPSTREAM_ERROR` / `PARSE_ERROR` (502), `CONFIG_
 `replacementCancelledDateIso`, `refundAmount`, `refundStatus` (`completed` | `initiated` | `""`),
 `refundDateIso` and `detailStatus` (`ok` | `failed` | `skipped`). They mean the same as the CSV
 columns (section 4); dates are ISO timestamps (the CSV shows them in IST), and missing values are
-`null` or `""`.
+`null` or `""`. Each row also carries `accountId` (the account's id, stable when its label is
+renamed), `unitId` (Flipkart's id for the unit) and `fsn` (its product's id), which invoice requests
+use; they aren't CSV columns.
 
 ### Run without Docker (local dev)
 
@@ -334,10 +371,21 @@ cd backend
 python -m scripts.capture_samples --cookie <path to a Cookie-Editor export>
 ```
 
-It writes `orders.json`, `detail-<category>-<n>.json`, `headings.txt` and `paths.txt` to
+It writes `orders.json`, `detail-<category>-<n>.json`, `headings.txt`, `paths.txt`, `addons.txt`
+(add-on units next to the product units of the same orders, to spot a new add-on marker) and
+`invoice.txt` (every invoice-related node on the detail pages, IDs masked) to
 `backend/.samples/<cookie-file-name>/` (`--out` changes the folder, `--per-category` the sample
-count). **These files contain real customer data.** `backend/.samples/` is gitignored: never commit
-or share it, and write test fixtures with made-up values instead.
+count). `python -m scripts.probe_invoice --cookie <export>` downloads one delivered order's invoices
+through the app's own code and reports what came back (`--save` keeps the file there).
+**These files contain real customer data.** `backend/.samples/` is gitignored (and kept out of the
+Docker build context): never commit or share it, and write test fixtures with made-up values instead.
+
+Without Python on the host, run them in a throwaway backend container instead (from the repo root;
+the image holds only `app/`, so mount the scripts, the output folder and the cookie file):
+
+```bash
+docker compose run --rm --no-deps -v ./backend/app:/app/app:ro -v ./backend/scripts:/app/scripts:ro -v ./backend/.samples:/app/.samples -v ./docs/cookies:/cookies:ro backend python -m scripts.capture_samples --cookie /cookies/<export>.txt
+```
 
 ---
 

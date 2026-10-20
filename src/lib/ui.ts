@@ -8,6 +8,7 @@ export const ERROR_TEXT: Record<ErrorCode, string> = {
   UPSTREAM_ERROR: "couldn't reach Flipkart",
   PARSE_ERROR: "unexpected response",
   CONFIG_ERROR: "not configured",
+  INVOICE_UNAVAILABLE: "invoice not available yet",
   UNKNOWN: "unknown error",
 };
 
@@ -15,6 +16,12 @@ export const ERROR_TEXT: Record<ErrorCode, string> = {
 // sends that this build doesn't know yet, instead of rendering "undefined".
 export function errorText(code: ErrorCode | undefined): string {
   return (code && ERROR_TEXT[code]) || ERROR_TEXT.UNKNOWN;
+}
+
+// errorText capitalised for a heading or the start of a sentence ("Session expired").
+export function errorHeading(code: ErrorCode | undefined): string {
+  const text = errorText(code);
+  return text.charAt(0).toUpperCase() + text.slice(1);
 }
 
 // Shared status "tone" recipes: one source of truth for chip + dot colors (light AND dark),

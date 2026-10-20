@@ -10,15 +10,16 @@ that want resilience (per-detail, per-account) catch and record the failure them
 
 from __future__ import annotations
 
+import json
 import logging
 import threading
 import time
-from urllib.parse import urlencode
+from urllib.parse import quote, urlencode
 
 from scrapling.fetchers import Fetcher
 
 from .config import config
-from .errors import auth_expired, parse_error, upstream
+from .errors import auth_expired, invoice_unavailable, parse_error, upstream
 from .parser import ensure_orders_shape
 
 log = logging.getLogger("flipkart")
@@ -172,4 +173,57 @@ def fetch_detail_raw(cookies: dict, order_id: str, unit_id: str, share_token: st
         raise upstream("Flipkart order-detail response was not JSON.") from err
 
 
-__all__ = ["fetch_orders", "fetch_detail_raw"]
+def _is_try_later(body: bytes) -> bool:
+    """Flipkart's JSON error envelope ({"STATUS_CODE": 500, "RESPONSE": null, ...}). The invoice
+    endpoint answers an order with nothing dispatched (and an unknown order id) exactly this way."""
+    try:
+        data = json.loads(body)
+    except ValueError:
+        return False
+    return isinstance(data, dict) and "STATUS_CODE" in data and data.get("RESPONSE") is None
+
+
+def fetch_invoice(cookies: dict, order_id: str) -> bytes:
+    """GET the order's invoices: a ZIP with one PDF per invoice (verified 2026-10-20; the detail
+    page's INVOICE_DOWNLOAD action is a GET of 1/self-serve/invoice/download/<orderId>). A bare PDF
+    is accepted too. RAISES AUTH_EXPIRED (401/403 or a redirect to login), INVOICE_UNAVAILABLE (the
+    JSON "try again later" Flipkart sends while no unit is dispatched), PARSE_ERROR (a 200 that is
+    no file) and UPSTREAM_ERROR otherwise. A successful body is never logged: it's an invoice."""
+    url = f"{config.invoice_url}{quote(order_id, safe='')}"
+    try:
+        with _conn:
+            # No redirects: Flipkart serves the file itself, and a followed redirect would carry the
+            # session cookies to wherever it points.
+            res = Fetcher.get(url, headers=_headers({"accept": "application/zip, application/pdf, */*"}),
+                              cookies=cookies, timeout=config.timeout, impersonate=config.impersonate,
+                              stealthy_headers=False, follow_redirects=False)
+    except Exception as err:
+        log.warning("invoice %s failed: %s: %s", order_id, type(err).__name__, err)
+        raise upstream(f"Flipkart invoice request failed ({type(err).__name__}).") from err
+    status = getattr(res, "status", 0)
+    body = getattr(res, "body", b"")
+    body = body if isinstance(body, bytes) else str(body or "").encode()
+    headers = getattr(res, "headers", None) or {}
+    location = next((str(v) for k, v in headers.items() if str(k).lower() == "location"), "")
+    if status in (401, 403) or (300 <= status < 400 and "login" in location.lower()):
+        log.warning("invoice %s auth rejected: HTTP %s", order_id, status)
+        raise auth_expired()
+    if 300 <= status < 400:
+        log.warning("invoice %s: unexpected redirect (HTTP %s)", order_id, status)
+        raise upstream(f"Flipkart invoice request was redirected (HTTP {status}).")
+    if status == 200:
+        if body[:2] == b"PK" or body[:5] == b"%PDF-":
+            return body
+        content_type = next((v for k, v in headers.items() if str(k).lower() == "content-type"), "?")
+        log.warning("invoice %s: HTTP 200 but not a file (%d bytes, %s)", order_id, len(body), content_type)
+        raise parse_error("Flipkart's invoice response was not a file (session likely expired).")
+    if _is_try_later(body):
+        log.info("invoice %s unavailable: %s", order_id, _describe(res))
+        raise invoice_unavailable(
+            "Flipkart has no invoice for this order yet (it appears once a unit ships). Try again later."
+        )
+    log.warning("invoice %s failed: %s", order_id, _describe(res))
+    raise upstream(f"Flipkart invoice request failed (HTTP {status}).")
+
+
+__all__ = ["fetch_orders", "fetch_detail_raw", "fetch_invoice"]

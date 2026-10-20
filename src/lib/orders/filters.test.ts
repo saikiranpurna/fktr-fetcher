@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
 import type { Order, OrderStatus } from "../types";
-import { applyOrderFilters, DEFAULT_FILTERS, ymdInTz } from "./filters";
+import {
+  applyOrderFilters,
+  DEFAULT_FILTERS,
+  isDefaultFilters,
+  type OrderFlag,
+  type RefundFilter,
+  ymdInTz,
+} from "./filters";
 
 const TZ = "Asia/Kolkata";
 const NOW = new Date("2026-07-03T12:00:00+05:30");
@@ -103,5 +110,76 @@ describe("applyOrderFilters", () => {
     ];
     const out = applyOrderFilters(local, { ...DEFAULT_FILTERS, accounts: ["North", "East"] }, NOW, TZ);
     expect(out.map((o) => o.orderId).sort()).toEqual(["E", "N"]);
+  });
+
+  it("filters by a custom inclusive date range, either end open", () => {
+    const ids = (dateFrom: string, dateTo: string) =>
+      applyOrderFilters(orders, { ...DEFAULT_FILTERS, date: "custom", dateFrom, dateTo }, NOW, TZ)
+        .map((o) => o.orderId)
+        .sort();
+    expect(ids("2026-07-02", "2026-07-03")).toEqual(["A", "B", "D"]);
+    expect(ids("2026-07-04", "")).toEqual(["C"]);
+    expect(ids("", "2026-06-30")).toEqual(["E"]);
+    expect(ids("", "")).toHaveLength(5); // custom with no bounds filters nothing
+  });
+
+  it("filters by refund status", () => {
+    const local: Order[] = [
+      order({ orderId: "DONE", refundStatus: "completed" }),
+      order({ orderId: "WIP", refundStatus: "initiated" }),
+      order({ orderId: "NONE", refundStatus: "" }),
+      order({ orderId: "LEGACY" }), // a producer without refund fields counts as no refund
+    ];
+    const ids = (refund: RefundFilter) =>
+      applyOrderFilters(local, { ...DEFAULT_FILTERS, refund }, NOW, TZ).map((o) => o.orderId);
+    expect(ids("completed")).toEqual(["DONE"]);
+    expect(ids("initiated")).toEqual(["WIP"]);
+    expect(ids("none")).toEqual(["NONE", "LEGACY"]);
+  });
+
+  it("requires every selected flag", () => {
+    const local: Order[] = [
+      order({ orderId: "OTP", otp: "1234" }),
+      order({ orderId: "OTP_GST", otp: "5678", gstin: "29ABCDE1234F1Z5" }),
+      order({ orderId: "REPL", replacementOf: "FMPP1000000001" }),
+      order({ orderId: "FAIL", detailStatus: "failed" }),
+      order({ orderId: "PLAIN", detailStatus: "ok", replacementOf: "", gstin: "" }),
+    ];
+    const ids = (flags: OrderFlag[]) =>
+      applyOrderFilters(local, { ...DEFAULT_FILTERS, flags }, NOW, TZ).map((o) => o.orderId);
+    expect(ids(["hasOtp"])).toEqual(["OTP", "OTP_GST"]);
+    expect(ids(["hasOtp", "hasGstin"])).toEqual(["OTP_GST"]);
+    expect(ids(["replacement"])).toEqual(["REPL"]);
+    expect(ids(["detailFailed"])).toEqual(["FAIL"]);
+  });
+
+  it("filters by an inclusive price range and drops rows without a price", () => {
+    const local: Order[] = [
+      order({ orderId: "CHEAP", pricePaid: 199 }),
+      order({ orderId: "MID", pricePaid: 1500 }),
+      order({ orderId: "DEAR", pricePaid: 50000 }),
+      order({ orderId: "UNKNOWN", pricePaid: null }),
+    ];
+    const ids = (priceMin: number | null, priceMax: number | null) =>
+      applyOrderFilters(local, { ...DEFAULT_FILTERS, priceMin, priceMax }, NOW, TZ).map((o) => o.orderId);
+    expect(ids(199, 1500)).toEqual(["CHEAP", "MID"]);
+    expect(ids(1000, null)).toEqual(["MID", "DEAR"]);
+    expect(ids(null, 199)).toEqual(["CHEAP"]);
+    expect(ids(null, null)).toHaveLength(4);
+  });
+});
+
+describe("isDefaultFilters", () => {
+  it("is true for the defaults and for filter objects without the optional fields", () => {
+    expect(isDefaultFilters(DEFAULT_FILTERS)).toBe(true);
+    expect(isDefaultFilters({ statuses: [], date: "all", accounts: [], search: "" })).toBe(true);
+    expect(isDefaultFilters({ ...DEFAULT_FILTERS, date: "custom" })).toBe(true);
+  });
+
+  it("is false once any filter is set", () => {
+    expect(isDefaultFilters({ ...DEFAULT_FILTERS, date: "custom", dateFrom: "2026-07-01" })).toBe(false);
+    expect(isDefaultFilters({ ...DEFAULT_FILTERS, refund: "none" })).toBe(false);
+    expect(isDefaultFilters({ ...DEFAULT_FILTERS, flags: ["hasOtp"] })).toBe(false);
+    expect(isDefaultFilters({ ...DEFAULT_FILTERS, priceMin: 0 })).toBe(false);
   });
 });

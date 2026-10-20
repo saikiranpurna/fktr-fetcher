@@ -1,5 +1,6 @@
 "use client";
 
+import type { ReactNode } from "react";
 import type { Coverage } from "@/lib/types";
 
 function formatTime(iso: string | null): string {
@@ -21,6 +22,7 @@ export function RefreshBar({
   onDownload,
   downloading,
   coverage,
+  actions,
 }: {
   loading: boolean;
   lastFetchedAt: string | null;
@@ -32,6 +34,7 @@ export function RefreshBar({
   onDownload: () => void;
   downloading: boolean;
   coverage: Coverage | null;
+  actions?: ReactNode; // more export buttons, rendered after Download CSV
 }) {
   const downloadDisabled = downloading || count === 0;
   const coverageDot =
@@ -63,6 +66,8 @@ export function RefreshBar({
       >
         {downloading ? "Preparing…" : "Download CSV"}
       </button>
+
+      {actions}
 
       <label className="inline-flex min-h-11 cursor-pointer select-none items-center gap-2 text-sm text-neutral-700 dark:text-neutral-300">
         <input

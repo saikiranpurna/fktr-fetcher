@@ -183,6 +183,9 @@ class Poller:
         else:
             try:
                 orders, meta = service.fetch_account_orders(label, cookies)
+                # The account id (not the label, which can be renamed) is what an invoice download
+                # sends back to find this account's cookies.
+                orders = [{**o, "accountId": aid} for o in orders]
                 partial = bool(meta.get("partial", False))
                 detail_failed = int(meta.get("detailFailed", 0) or 0)
                 ok = True
@@ -202,6 +205,16 @@ class Poller:
                 ac.fetched_monotonic = None if stale else time.monotonic()
                 ac.fetched_at = _now_iso()
                 if ok and orders is not None:
+                    if partial and ac.orders:
+                        # A partial fetch (a later page failed, the deadline or the page cap) only
+                        # reached the newest orders: keep the older ones from earlier fetches rather
+                        # than dropping them from the board until the next complete fetch.
+                        reached = {o.get("orderId") for o in orders}
+                        orders = orders + [
+                            {**o, "account": label, "accountId": aid}
+                            for o in ac.orders
+                            if o.get("orderId") not in reached
+                        ]
                     ac.orders = orders
                     ac.count = len(orders)
                     ac.ok = True
@@ -269,6 +282,20 @@ class Poller:
     def roster_size(self) -> int:
         with self._lock:
             return len(self._roster)
+
+    def order_rows(self, account_id: str, order_id: str) -> list[dict]:
+        """The cached rows of one order for one account (its shipments: unitId, fsn, trackingId),
+        which pair an invoice bundle's tax invoices with shipments. [] when not cached."""
+        with self._lock:
+            ac = self._cache.get(account_id)
+            return [o for o in ac.orders if o.get("orderId") == order_id] if ac else []
+
+    def cookies_for(self, account_id: str) -> dict | None:
+        """An active account's cookies from the in-memory roster (no storage scan), or None for an
+        unknown / paused / removed account."""
+        with self._lock:
+            entry = self._roster.get(account_id)
+            return entry["cookies"] if entry else None
 
 
 instance = Poller()

@@ -6,3 +6,5 @@ __pycache__/
 .venv/
 venv/
 *.json.tmp
+# raw captured Flipkart responses and probed invoices (customer PII)
+.samples/

@@ -4,12 +4,14 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 import json
+import re
+import tempfile
 from datetime import datetime, timezone
 
 from fastapi import FastAPI, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 from starlette.concurrency import run_in_threadpool
 
 from . import poller, service, store
@@ -37,6 +39,8 @@ app.add_middleware(
     allow_origins=config.cors_origins,
     allow_methods=["*"],
     allow_headers=["*"],
+    # The invoice ZIP reports how many invoices made it in; cross-origin JS can't read other headers.
+    expose_headers=["Content-Disposition", "X-Invoice-Files", "X-Invoice-Missing"],
 )
 # The /api/orders payload aggregates every account's orders and is polled ~60s; gzip it (JSON
 # with repeated keys/labels compresses heavily) so 1000-account responses stay cheap on the wire.
@@ -83,10 +87,127 @@ def get_orders() -> JSONResponse:
             "coverage": coverage,
             "fetchedAt": datetime.now(timezone.utc).isoformat(),
             "timezone": config.timezone,
+            "invoiceZipMax": config.invoice_zip_max,
         })
     except Exception as err:  # noqa: BLE001 - mapped to the shared error contract
         body, status = to_error_response(err)
         return JSONResponse(body, status_code=status)
+
+
+# Flipkart order ids ("OD" + digits), account ids (label slugs) and unit ids. They end up in a
+# Content-Disposition filename or a ZIP entry name, so anything else is refused up front.
+_ORDER_ID = re.compile(r"^OD[0-9]{6,30}$")
+_ACCOUNT_ID = re.compile(r"^[A-Za-z0-9_-]{1,100}$")
+_UNIT_ID = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+_MAX_ZIP_REQUEST_BYTES = 512 * 1024  # INVOICE_ZIP_MAX orders of a few dozen units each, with room
+_ZIP_SPOOL_BYTES = 32 * 1024 * 1024  # bulk ZIPs bigger than this spill from memory to a temp file
+
+
+def _bad_request(message: str) -> JSONResponse:
+    body, status = to_error_response(config_error(message))
+    return JSONResponse(body, status_code=status)
+
+
+def _script_required(request: Request) -> JSONResponse | None:
+    """Reject a GET that a page from another site could fire without a CORS preflight (an <img>
+    or link to localhost). Requiring a custom header forces the browser to preflight, which
+    CORS_ORIGINS refuses for foreign origins: unlike /api/orders, the invoice route makes a live
+    Flipkart call with the owner's session. Scripts and curl just send the header."""
+    if request.headers.get("x-requested-with"):
+        return None
+    return _bad_request("Missing X-Requested-With header.")
+
+
+@app.get("/api/invoice", response_model=None)
+def get_invoice(
+    request: Request,
+    account_id: str = Query("", alias="accountId"),
+    order_id: str = Query("", alias="orderId"),
+    unit_id: str = Query("", alias="unitId"),
+) -> Response:
+    """One card's tax invoice (a PDF), picked out of the order's invoice bundle. Unlike /api/orders
+    this calls Flipkart on request (sync handler, so it runs off the event loop)."""
+    denied = _script_required(request)
+    if denied:
+        return denied
+    if not (_ACCOUNT_ID.match(account_id) and _ORDER_ID.match(order_id) and _UNIT_ID.match(unit_id)):
+        return _bad_request("Query must include a valid 'accountId', 'orderId' and 'unitId'.")
+    try:
+        pdf, tracking = service.fetch_invoice(account_id, order_id, unit_id)
+    except Exception as err:  # noqa: BLE001 - mapped to the shared error contract
+        body, status = to_error_response(err)
+        return JSONResponse(body, status_code=status)
+    shipment = re.sub(r"[^A-Za-z0-9_-]", "", tracking) or unit_id
+    return Response(
+        pdf,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": f'attachment; filename="invoice-{order_id}-{shipment}.pdf"',
+            "Cache-Control": "no-store",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
+
+
+def _valid_ids(values: object, pattern: re.Pattern) -> bool:
+    return isinstance(values, list) and bool(values) and all(isinstance(v, str) and pattern.match(v) for v in values)
+
+
+@app.post("/api/invoices/zip", response_model=None)
+async def post_invoices_zip(request: Request) -> Response:
+    """The tax invoices of the filtered cards in ONE ZIP. Body: {orders: [{orderId, accountIds,
+    unitIds}]}: each order's bundle is fetched once, through the first of its accounts that can.
+    JSON-only like the account mutations: a cross-site "simple" POST must not be able to fire
+    Flipkart calls with the owner's sessions."""
+    denied = _json_required(request)
+    if denied:
+        return denied
+    raw = await request.body()
+    if len(raw) > _MAX_ZIP_REQUEST_BYTES:
+        return _bad_request("Request too large.")
+    try:
+        body = json.loads(raw) if raw else None
+    except Exception:
+        body = None
+    orders = body.get("orders") if isinstance(body, dict) else None
+    valid = isinstance(orders, list) and bool(orders) and all(
+        isinstance(o, dict)
+        and isinstance(o.get("orderId"), str) and _ORDER_ID.match(o["orderId"])
+        and _valid_ids(o.get("accountIds"), _ACCOUNT_ID)
+        and _valid_ids(o.get("unitIds"), _UNIT_ID)
+        for o in orders
+    )
+    if not valid:
+        return _bad_request("Request body must include 'orders': a non-empty [{orderId, accountIds, unitIds}] array.")
+
+    spool = tempfile.SpooledTemporaryFile(max_size=_ZIP_SPOOL_BYTES)
+    try:
+        summary = await run_in_threadpool(service.build_invoices_zip, orders, spool)
+    except Exception as err:  # noqa: BLE001 - mapped to the shared error contract
+        spool.close()
+        body, status = to_error_response(err)
+        return JSONResponse(body, status_code=status)
+    size = spool.tell()
+    spool.seek(0)
+
+    def chunks():
+        try:
+            while block := spool.read(1024 * 1024):
+                yield block
+        finally:
+            spool.close()
+
+    return StreamingResponse(
+        chunks(),
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": 'attachment; filename="flipkart-invoices.zip"',
+            "Content-Length": str(size),
+            "Cache-Control": "no-store",
+            "X-Invoice-Files": str(summary["files"]),
+            "X-Invoice-Missing": str(summary["missing"]),
+        },
+    )
 
 
 @app.get("/api/accounts")

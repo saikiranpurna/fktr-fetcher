@@ -1,4 +1,5 @@
-"""HTTP layer: CORS allow-list, admin-token rejection, multi-id DELETE, and account mutations.
+"""HTTP layer: CORS allow-list, admin-token rejection, multi-id DELETE, account mutations, and the
+invoice download routes.
 
 The lifespan is never entered (no ``with TestClient``) and the poller is disabled anyway, so no
 scheduler thread starts and nothing reaches Flipkart; storage is the isolated file backend.
@@ -6,11 +7,16 @@ scheduler thread starts and nothing reaches Flipkart; storage is the isolated fi
 
 from __future__ import annotations
 
+import io
+import json
+import zipfile
+
 import pytest
 from fastapi.testclient import TestClient
 
-from app import main, poller, store
+from app import main, poller, service, store
 from app.config import config
+from app.errors import auth_expired, invoice_unavailable
 
 THREE = '[{"label":"a","cookie":"SN=1"},{"label":"b","cookie":"SN=2"},{"label":"c","cookie":"SN=3"}]'
 
@@ -148,3 +154,115 @@ def test_post_and_patch_accounts(client, wakes):
     res = client.patch("/api/accounts", json={"ids": ["home"], "active": False})
     assert res.status_code == 200 and res.json()["accounts"][0]["active"] is False
     assert store.get_active_accounts() == [] and len(wakes) == 2
+
+
+# ── invoices ─────────────────────────────────────────────────────────────────
+
+CARD = {"accountId": "home", "orderId": "OD123456789", "unitId": "338851321797274100012"}
+ONE_ORDER = {"orders": [{"orderId": "OD123456789", "accountIds": ["home"], "unitIds": ["338851321797274100012"]}]}
+XHR = {"X-Requested-With": "fktr"}  # what the UI sends; forces a CORS preflight cross-origin
+
+
+def test_orders_response_tells_the_ui_the_invoice_zip_cap(client, monkeypatch):
+    store.import_accounts("acct", "SN=1")
+    monkeypatch.setattr(config, "invoice_zip_max", 7)
+    assert client.get("/api/orders").json()["invoiceZipMax"] == 7
+
+
+def test_invoice_route_serves_the_cards_pdf_and_validates_ids(client, monkeypatch):
+    seen: list = []
+
+    def fake(aid, oid, uid):
+        seen.append((aid, oid, uid))
+        return b"%PDF-1.4 fabricated", "FMPP0000000001"
+
+    monkeypatch.setattr(service, "fetch_invoice", fake)
+    res = client.get("/api/invoice", params=CARD, headers=XHR)
+    assert res.status_code == 200 and res.content.startswith(b"%PDF-")
+    assert seen == [("home", "OD123456789", "338851321797274100012")]
+    assert res.headers["content-type"] == "application/pdf"
+    assert res.headers["content-disposition"] == 'attachment; filename="invoice-OD123456789-FMPP0000000001.pdf"'
+    assert res.headers["cache-control"] == "no-store"
+
+    # Ids land in the filename header: anything but plain order / account / unit ids is refused.
+    for params in (
+        {**CARD, "orderId": 'OD1"; evil'},
+        {**CARD, "accountId": "../x"},
+        {**CARD, "unitId": "u 1"},
+        {"accountId": "home", "orderId": "OD123456789"},  # no unit: a card, not an order
+    ):
+        bad = client.get("/api/invoice", params=params, headers=XHR)
+        assert bad.status_code == 400 and bad.json()["error"]["code"] == "CONFIG_ERROR"
+
+
+def test_invoice_route_refuses_a_plain_cross_site_get(client, monkeypatch):
+    # A foreign page's <img src="http://localhost:8000/api/invoice?..."> sends no custom header; it
+    # must not trigger a live Flipkart call with the owner's session.
+    called: list = []
+    monkeypatch.setattr(service, "fetch_invoice", lambda *a: called.append(a))
+    res = client.get("/api/invoice", params=CARD)
+    assert res.status_code == 400 and res.json()["error"]["code"] == "CONFIG_ERROR"
+    assert called == []
+    # The UI's origin may send the header (the preflight is allowed); others get no CORS grant.
+    ok = client.options(
+        "/api/invoice",
+        headers={"Origin": "http://localhost:3100", "Access-Control-Request-Method": "GET",
+                 "Access-Control-Request-Headers": "x-requested-with"},
+    )
+    assert ok.status_code == 200 and ok.headers["access-control-allow-origin"] == "http://localhost:3100"
+    evil = client.options(
+        "/api/invoice",
+        headers={"Origin": "http://evil.example", "Access-Control-Request-Method": "GET",
+                 "Access-Control-Request-Headers": "x-requested-with"},
+    )
+    assert "access-control-allow-origin" not in evil.headers
+
+
+def test_invoice_route_maps_service_errors(client, monkeypatch):
+    def unavailable(aid, oid, uid):
+        raise invoice_unavailable("No tax invoice for this shipment yet.")
+
+    monkeypatch.setattr(service, "fetch_invoice", unavailable)
+    res = client.get("/api/invoice", params=CARD, headers=XHR)
+    assert res.status_code == 404 and res.json()["error"]["code"] == "INVOICE_UNAVAILABLE"
+
+
+def test_invoice_zip_route_streams_the_zip_with_counts(client, monkeypatch):
+    def fake(orders, dest):
+        assert orders == ONE_ORDER["orders"]
+        with zipfile.ZipFile(dest, "w") as zf:
+            zf.writestr("OD123456789/FMPP0000000001.pdf", b"%PDF-1.4 fabricated")
+        return {"files": 1, "missing": 0}
+
+    monkeypatch.setattr(service, "build_invoices_zip", fake)
+    res = client.post("/api/invoices/zip", json=ONE_ORDER, headers={"Origin": "http://localhost:3100"})
+    assert res.status_code == 200 and res.headers["content-type"] == "application/zip"
+    assert zipfile.ZipFile(io.BytesIO(res.content)).namelist() == ["OD123456789/FMPP0000000001.pdf"]
+    assert res.headers["x-invoice-files"] == "1" and res.headers["x-invoice-missing"] == "0"
+    assert "x-invoice-files" in res.headers["access-control-expose-headers"].lower()
+
+
+def test_invoice_zip_route_rejects_bad_bodies_and_cross_site_simple_posts(client, monkeypatch):
+    called: list = []
+    monkeypatch.setattr(service, "build_invoices_zip", lambda *a: called.append(a))
+    simple = client.post("/api/invoices/zip", content=json.dumps(ONE_ORDER), headers={"Content-Type": "text/plain"})
+    assert simple.status_code == 400
+    good = ONE_ORDER["orders"][0]
+    for body in (
+        {"orders": []},
+        {"orders": [{**good, "orderId": "nope"}]},
+        {"orders": [{**good, "unitIds": []}]},
+        {"orders": [{**good, "accountIds": ["../x"]}]},
+        {"items": [{"accountId": "home", "orderId": "OD123456789"}]},  # the old shape
+    ):
+        assert client.post("/api/invoices/zip", json=body).status_code == 400
+    assert called == []
+
+
+def test_invoice_zip_route_returns_the_error_when_nothing_could_be_saved(client, monkeypatch):
+    def expired(orders, dest):
+        raise auth_expired()
+
+    monkeypatch.setattr(service, "build_invoices_zip", expired)
+    res = client.post("/api/invoices/zip", json=ONE_ORDER)
+    assert res.status_code == 401 and res.json()["error"]["code"] == "AUTH_EXPIRED"

@@ -3,9 +3,12 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { ordersToCsv } from "@/lib/orders/csv";
 import { API_BASE } from "@/lib/api";
+import { saveBlob } from "@/lib/download";
+import { INVOICE_ZIP_MAX } from "@/lib/invoice";
 import {
   applyOrderFilters,
   DEFAULT_FILTERS,
+  isDefaultFilters,
   type OrderFilters as OrderFilterState,
 } from "@/lib/orders/filters";
 import type {
@@ -22,6 +25,7 @@ import type {
 import { errorText } from "@/lib/ui";
 import { AccountsPanel } from "./AccountsPanel";
 import { ErrorNotice } from "./ErrorNotice";
+import { InvoiceZipButton } from "./InvoiceZipButton";
 import { OrderFilters } from "./OrderFilters";
 import { OrderList } from "./OrderList";
 import { RefreshBar } from "./RefreshBar";
@@ -40,6 +44,7 @@ export function Dashboard() {
   const [accountMetas, setAccountMetas] = useState<AccountMeta[]>([]);
   const [accountStatuses, setAccountStatuses] = useState<AccountResult[]>([]);
   const [coverage, setCoverage] = useState<Coverage | null>(null);
+  const [invoiceZipMax, setInvoiceZipMax] = useState(INVOICE_ZIP_MAX);
   const [filters, setFilters] = useState<OrderFilterState>(DEFAULT_FILTERS);
   const [tab, setTab] = useState<"orders" | "accounts">("orders");
 
@@ -75,6 +80,7 @@ export function Dashboard() {
         setAccountStatuses(body.accounts);
         setCoverage(body.coverage);
         setTimezone(body.timezone || DEFAULT_TZ);
+        setInvoiceZipMax(body.invoiceZipMax ?? INVOICE_ZIP_MAX);
         setLastFetchedAt(body.fetchedAt);
         setError(null);
       } else {
@@ -93,14 +99,10 @@ export function Dashboard() {
     setDownloading(true);
     try {
       const csv = ordersToCsv(applyOrderFilters(orders, filters, new Date(), timezone), timezone);
-      const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `flipkart-orders-${new Date().toISOString().slice(0, 10)}.csv`;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      URL.revokeObjectURL(url);
+      saveBlob(
+        new Blob([csv], { type: "text/csv;charset=utf-8" }),
+        `flipkart-orders-${new Date().toISOString().slice(0, 10)}.csv`,
+      );
     } finally {
       setDownloading(false);
     }
@@ -127,11 +129,6 @@ export function Dashboard() {
 
   // Pending accounts (not yet fetched by the poller) are not failures — exclude them.
   const failedAccounts = accountStatuses.filter((a) => !a.ok && !a.pending);
-  const isDefaultFilters =
-    filters.statuses.length === 0 &&
-    filters.date === "all" &&
-    filters.accounts.length === 0 &&
-    filters.search === "";
 
   return (
     <div className="mx-auto flex w-full max-w-6xl flex-1 flex-col gap-4 p-4 sm:p-6">
@@ -229,6 +226,7 @@ export function Dashboard() {
             onDownload={downloadCsv}
             downloading={downloading}
             coverage={coverage}
+            actions={<InvoiceZipButton orders={visible} max={invoiceZipMax} />}
           />
 
           {error && <ErrorNotice code={error.code} message={error.message} />}
@@ -240,7 +238,7 @@ export function Dashboard() {
           <OrderList
             orders={visible}
             timezone={timezone}
-            hasFilters={!isDefaultFilters}
+            hasFilters={!isDefaultFilters(filters)}
             onClearFilters={() => setFilters(DEFAULT_FILTERS)}
           />
       </div>
